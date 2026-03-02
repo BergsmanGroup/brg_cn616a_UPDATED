@@ -24,6 +24,26 @@ from .state_reader import (
 )
 
 
+def _normalize_zone_names(raw: Any) -> Dict[str, str]:
+    names = {str(z): f"Zone {z}" for z in range(1, 7)}
+    if isinstance(raw, dict):
+        for z in range(1, 7):
+            text = raw.get(str(z), raw.get(z, names[str(z)]))
+            text = str(text).strip() if text is not None else ""
+            names[str(z)] = text or f"Zone {z}"
+    elif isinstance(raw, (list, tuple)):
+        for idx, text in enumerate(raw[:6], start=1):
+            value = str(text).strip() if text is not None else ""
+            names[str(idx)] = value or f"Zone {idx}"
+    return names
+
+
+def _load_zone_names_from_logs(logs_dir: Path) -> Dict[str, str]:
+    svc_state = get_service_config_state(logs_dir)
+    cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
+    return _normalize_zone_names(cfg.get("zone_names", {}))
+
+
 class StatePanel(tk.Frame):
     """Base class for state display panels."""
     
@@ -241,9 +261,16 @@ class TelemetryPanel(StatePanel):
                 avg_error = f"{avg_error:.3f}°C"
             if isinstance(threshold, float):
                 threshold = f"{threshold:.2f}°C"
+
+            if equilibrium is True:
+                equilibrium_txt = "Yes"
+            elif equilibrium is False:
+                equilibrium_txt = "No"
+            else:
+                equilibrium_txt = "N/A"
             
             status_icon = "✓" if equilibrium is True else "✗" if equilibrium is False else "?"
-            lines.append(f"  {status_icon} Equilibrium: {equilibrium}  |  Avg Error: {avg_error}  |  Threshold: {threshold}")
+            lines.append(f"  {status_icon} Equilibrium? {equilibrium_txt}  |  MAE (|e|): {avg_error}  |  Threshold: {threshold}")
             
             window = safe_get(analysis_data, "window_s", default="N/A")
             n_points = safe_get(analysis_data, "n_points", default="N/A")
@@ -261,6 +288,7 @@ class TelemetryPanel(StatePanel):
             telem_state = get_telemetry_state(self.logs_dir)
             analysis_state = get_analysis_state(self.logs_dir)
             config_state = get_config_state(self.logs_dir)
+            zone_names = _load_zone_names_from_logs(self.logs_dir)
             
             ts = telem_state.get("ts")
             port = telem_state.get("port")
@@ -292,8 +320,9 @@ class TelemetryPanel(StatePanel):
             # Update or create zone displays
             sorted_zone_ids = sorted(zones_data.keys(), key=lambda x: int(x) if x.isdigit() else 999)
             for idx, zone_id in enumerate(sorted_zone_ids):
+                zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
                 if zone_id not in self.zone_labels:
-                    zone_frame = ttk.LabelFrame(self.zones_container, text=f"Zone {zone_id}")
+                    zone_frame = ttk.LabelFrame(self.zones_container, text=zone_display)
                     row = idx // 3
                     col = idx % 3
                     zone_frame.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
@@ -301,6 +330,8 @@ class TelemetryPanel(StatePanel):
                     label.pack(padx=10, pady=5)
                     self.zone_labels[zone_id] = label
                     self.zone_frames[zone_id] = zone_frame
+                else:
+                    self.zone_frames[zone_id].config(text=zone_display)
                 
                 # Get telemetry, analysis, and config data for this zone
                 zone_data = zones_data[zone_id]
@@ -455,6 +486,7 @@ class ConfigPanel(StatePanel):
 
         self.zones_mode_var = tk.StringVar(value="auto")
         self.zones_list_entry = ttk.Entry(zones_box, width=26)
+        self.zone_name_entries = {str(z): ttk.Entry(zones_box, width=26) for z in range(1, 7)}
 
         ttk.Label(zones_box, text="Mode:").grid(row=0, column=0, sticky="e", padx=(8, 8), pady=3)
         mode_frame = ttk.Frame(zones_box)
@@ -466,6 +498,14 @@ class ConfigPanel(StatePanel):
         self.zones_list_entry.grid(row=1, column=1, sticky="w", padx=(0, 8), pady=3)
         self.zones_list_entry.bind("<KeyRelease>", self._on_form_edited)
         self.zones_list_entry.bind("<FocusOut>", self._on_form_edited)
+
+        for idx in range(1, 7):
+            row = idx + 1
+            entry = self.zone_name_entries[str(idx)]
+            ttk.Label(zones_box, text=f"Zone {idx} name:").grid(row=row, column=0, sticky="e", padx=(8, 8), pady=3)
+            entry.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=3)
+            entry.bind("<KeyRelease>", self._on_form_edited)
+            entry.bind("<FocusOut>", self._on_form_edited)
 
         # ---- Viewer section ----
         viewer_box = ttk.LabelFrame(self.service_form_frame, text="Viewer Settings")
@@ -516,12 +556,13 @@ class ConfigPanel(StatePanel):
             
             # Zones section
             zones = config.get("zones", {})
-            self._update_zones_config(zones)
             
             # Service configuration section (separate state file)
             svc_state = get_service_config_state(self.logs_dir)
             svc_ts = svc_state.get("ts")
             svc_cfg = svc_state.get("config", {})
+            zone_names = _normalize_zone_names(svc_cfg.get("zone_names", {})) if isinstance(svc_cfg, dict) else _normalize_zone_names({})
+            self._update_zones_config(zones, zone_names)
             self.service_info_label.config(text=f"Last update: {format_timestamp(svc_ts)}")
             if not svc_cfg:
                 self.service_status_label.config(text="No service config data available", foreground="gray")
@@ -590,6 +631,10 @@ class ConfigPanel(StatePanel):
             else:
                 zones_text = ""
             self._set_entry_text(self.zones_list_entry, zones_text)
+
+            zone_names = _normalize_zone_names(cfg.get("zone_names", {}))
+            for z in range(1, 7):
+                self._set_entry_text(self.zone_name_entries[str(z)], zone_names[str(z)])
 
             viewer = self._extract_viewer_from_cfg(cfg)
             history_hours = float(viewer.get("history_hours", 1.0) or 1.0)
@@ -708,6 +753,11 @@ class ConfigPanel(StatePanel):
         return patch
 
     def _build_zones_patch(self) -> Dict[str, Any]:
+        zone_names = {}
+        for z in range(1, 7):
+            raw = self.zone_name_entries[str(z)].get().strip()
+            zone_names[str(z)] = raw or f"Zone {z}"
+
         mode = self.zones_mode_var.get().strip().lower()
         if mode == "list":
             zones = []
@@ -719,9 +769,9 @@ class ConfigPanel(StatePanel):
                     zones.append(int(token))
             zones = [z for z in zones if 1 <= z <= 6]
             if zones:
-                return {"zones_mode": "list", "zones_list": zones}
-            return {"zones_mode": "auto"}
-        return {"zones_mode": "auto"}
+                return {"zones_mode": "list", "zones_list": zones, "zone_names": zone_names}
+            return {"zones_mode": "auto", "zone_names": zone_names}
+        return {"zones_mode": "auto", "zone_names": zone_names}
 
     def _build_viewer_patch(self) -> Dict[str, Any]:
         history_seconds = self._safe_float(self.viewer_history_hours.get())
@@ -836,10 +886,11 @@ class ConfigPanel(StatePanel):
         # retained for compatibility if needed elsewhere
         return json.dumps(cfg, indent=2)
     
-    def _update_zones_config(self, zones: Dict):
+    def _update_zones_config(self, zones: Dict, zone_names: Optional[Dict[str, str]] = None):
         """Update zone configuration tabs."""
         try:
             self._debug_log(f"[_update_zones_config] zones type: {type(zones)}")
+            zone_names = zone_names or {}
             
             # Validate zones is a dict
             if not isinstance(zones, dict):
@@ -889,7 +940,8 @@ class ConfigPanel(StatePanel):
                         continue
                     
                     frame = ttk.Frame(self.zones_notebook)
-                    self.zones_notebook.add(frame, text=f"Zone {zone_id}")
+                    zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
+                    self.zones_notebook.add(frame, text=zone_display)
                     
                     label = ttk.Label(frame, text="", justify=tk.LEFT, font=("Courier", 8))
                     label.pack(padx=10, pady=10, anchor="nw")
@@ -1011,14 +1063,17 @@ class RampSoakPanel(StatePanel):
                 return "No zones configured"
             
             lines = []
+            zone_names = _load_zone_names_from_logs(self.logs_dir)
             for zone_id in sorted(zones.keys(), key=lambda x: int(str(x)) if str(x).isdigit() else 999):
                 try:
                     zone_data = zones[zone_id]
                     segments = zone_data.get("segments", []) if isinstance(zone_data, dict) else []
-                    lines.append(f"Zone {zone_id}: {len(segments)} segments")
+                    zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
+                    lines.append(f"{zone_display}: {len(segments)} segments")
                 except Exception as e:
                     print(f"[_format_rampsoak] Zone {zone_id} error: {e}")
-                    lines.append(f"Zone {zone_id}: (error reading)")
+                    zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
+                    lines.append(f"{zone_display}: (error reading)")
             
             return "\n".join(lines)
         except Exception as e:

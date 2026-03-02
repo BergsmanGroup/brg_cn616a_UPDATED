@@ -40,6 +40,33 @@ class ZoneNavigationToolbar(NavigationToolbar2Tk):
 _TELEMETRY_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
 
 
+def _normalize_zone_names(raw: Any) -> Dict[int, str]:
+    """Normalize zone_names from config into {zone_id: display_name}."""
+    defaults = {z: f"Zone {z}" for z in range(1, 7)}
+
+    if isinstance(raw, dict):
+        for z in range(1, 7):
+            text = raw.get(str(z), raw.get(z, defaults[z]))
+            text = str(text).strip() if text is not None else ""
+            defaults[z] = text or f"Zone {z}"
+        return defaults
+
+    if isinstance(raw, (list, tuple)):
+        for idx, text in enumerate(raw[:6], start=1):
+            name = str(text).strip() if text is not None else ""
+            defaults[idx] = name or f"Zone {idx}"
+        return defaults
+
+    return defaults
+
+
+def _load_zone_names(logs_dir: Path) -> Dict[int, str]:
+    from .state_reader import get_service_config_state
+    svc = get_service_config_state(logs_dir)
+    cfg = svc.get("config", {}) if isinstance(svc, dict) else {}
+    return _normalize_zone_names(cfg.get("zone_names", {}))
+
+
 def _iter_lines_reverse(file_path: Path, chunk_size: int = 65536):
     """Yield non-empty file lines in reverse order without loading full file into memory."""
     with open(file_path, "rb") as f:
@@ -315,9 +342,11 @@ class ZoneChartPanel(tk.Frame):
     
     def __init__(self, parent, zone_id: int, logs_dir: Path,
                  viewer_cfg: Dict[str, Any],
+                 zone_name: Optional[str] = None,
                  refresh_interval: float = 2.0, debug: bool = False):
         super().__init__(parent)
         self.zone_id = zone_id
+        self.zone_name = str(zone_name).strip() if zone_name else f"Zone {zone_id}"
         self.logs_dir = Path(logs_dir)
         self.refresh_interval = refresh_interval
         self.debug = debug
@@ -450,7 +479,12 @@ class ZoneChartPanel(tk.Frame):
 
     def _update_zone_header(self):
         if self.header_label is not None:
-            self.header_label.config(text=f"Zone {self.zone_id} ({self._history_seconds()}-s window)")
+            self.header_label.config(text=f"{self.zone_name} ({self._history_seconds()}-s window)")
+
+    def set_zone_name(self, zone_name: Optional[str]):
+        name = str(zone_name).strip() if zone_name else ""
+        self.zone_name = name or f"Zone {self.zone_id}"
+        self._update_zone_header()
 
     def set_live_metrics(self, zone_metrics: Dict[str, Any], analysis_metrics: Optional[Dict[str, Any]] = None):
         """Update one-line live metrics summary above chart."""
@@ -491,7 +525,7 @@ class ZoneChartPanel(tk.Frame):
             eq_txt = "N/A"
         avg_err_txt = f"{float(avg_error):.3f}°C" if isinstance(avg_error, (int, float)) else "N/A"
 
-        row1 = f"PV: {pv_txt}   SP: {sp_txt}   Equilibrium? (error): {eq_txt} ({avg_err_txt})"
+        row1 = f"PV: {pv_txt}   SP: {sp_txt}   Equilibrium? {eq_txt}   MAE (|e|): {avg_err_txt}"
         row2 = f"Control: {control_method}   AT: {at_state} ({at_sp_txt})   P: {p_txt}   I: {i_txt}   D: {d_txt}"
         self.metrics_label.config(text=f"{row1}\n{row2}")
 
@@ -660,7 +694,6 @@ class ZoneChartPanel(tk.Frame):
             if not times:
                 ax_pv.text(0.5, 0.5, "No data", ha="center", va="center", 
                           transform=ax_pv.transAxes, fontsize=14)
-                self.fig.suptitle(f"Zone {self.zone_id}", fontsize=12, fontweight="bold")
                 self.canvas.draw()
                 return
             
@@ -709,7 +742,6 @@ class ZoneChartPanel(tk.Frame):
                     print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(sp_auto_vals)} SP Autotune points")
             
             # Configure axes
-            ax_pv.set_title(f"Zone {self.zone_id}", fontweight="bold", fontsize=11)
             ax_pv.set_xlabel("Time", fontsize=10)
             ax_pv.set_ylabel("PV (°C)", color="blue", fontsize=10, fontweight="bold")
             ax_sp.set_ylabel("Setpoint (°C)", color="darkred", fontsize=10, fontweight="bold")
@@ -736,7 +768,9 @@ class ZoneChartPanel(tk.Frame):
             all_lines = lines_pv + lines_sp
             if all_lines:
                 labels = [l.get_label() for l in all_lines]
-                ax_pv.legend(all_lines, labels, loc="upper left", fontsize=9)
+                legend = ax_pv.legend(all_lines, labels, loc="upper left", fontsize=9)
+                legend.set_zorder(1000)
+                legend.get_frame().set_alpha(0.9)
 
             # Home view is the auto-scaled view for this data.
             self._home_view = self._capture_current_view()
@@ -783,6 +817,8 @@ class ChartPanel(tk.Frame):
         self.zone_panels: List[ZoneChartPanel] = []
         self._refresh_after_id: Optional[str] = None
         self.title_label: Optional[ttk.Label] = None
+        self.notebook: Optional[ttk.Notebook] = None
+        self._zone_names: Dict[int, str] = {z: f"Zone {z}" for z in range(1, 7)}
         
         self.create_widgets()
         
@@ -803,13 +839,14 @@ class ChartPanel(tk.Frame):
         self.title_label.pack(side=tk.LEFT)
         
         # Sub-notebook for zones
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # pull viewer settings from service config
         from .state_reader import get_service_config_state
         svc = get_service_config_state(self.logs_dir)
         svc_cfg = svc.get("config", {})
+        self._zone_names = _normalize_zone_names(svc_cfg.get("zone_names", {}))
         viewer_cfg = svc_cfg.get("viewer", {})
         if not viewer_cfg:
             viewer_cfg = {
@@ -824,13 +861,31 @@ class ChartPanel(tk.Frame):
         # Create a panel for each zone using the same viewer config
         for zone_id in range(1, 7):
             zone_panel = ZoneChartPanel(
-                notebook, zone_id, self.logs_dir,
+                self.notebook, zone_id, self.logs_dir,
                 viewer_cfg,
+                zone_name=self._zone_names.get(zone_id, f"Zone {zone_id}"),
                 refresh_interval=self.refresh_interval,
                 debug=self.debug
             )
-            notebook.add(zone_panel, text=f"Zone {zone_id}")
+            self.notebook.add(zone_panel, text=self._zone_names.get(zone_id, f"Zone {zone_id}"))
             self.zone_panels.append(zone_panel)
+
+    def apply_zone_names(self, zone_names: Dict[int, str]):
+        normalized = _normalize_zone_names(zone_names)
+        if normalized == self._zone_names:
+            return
+        self._zone_names = normalized
+
+        if self.notebook is None:
+            return
+
+        for idx, panel in enumerate(self.zone_panels):
+            display_name = self._zone_names.get(panel.zone_id, f"Zone {panel.zone_id}")
+            panel.set_zone_name(display_name)
+            try:
+                self.notebook.tab(idx, text=display_name)
+            except Exception:
+                pass
 
     def _update_title(self, history_hours: float):
         history_seconds = max(1, int(round(float(history_hours) * 3600.0)))
@@ -858,6 +913,8 @@ class ChartPanel(tk.Frame):
     def refresh(self):
         """Refresh all zone panels."""
         try:
+            self.apply_zone_names(_load_zone_names(self.logs_dir))
+
             # Load all zones once; distribute to zone tabs.
             all_zones_data = load_telemetry_points(
                 self.logs_dir,
@@ -906,6 +963,11 @@ class ChartPanel(tk.Frame):
 
         if self.zone_panels:
             self._update_title(max(panel.history_hours for panel in self.zone_panels))
+
+    def apply_service_config(self, cfg: Dict[str, Any]):
+        if not isinstance(cfg, dict):
+            return
+        self.apply_zone_names(_normalize_zone_names(cfg.get("zone_names", {})))
     
     def destroy(self):
         """Clean up all zone panels when container is destroyed."""

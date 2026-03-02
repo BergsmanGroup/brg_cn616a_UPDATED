@@ -206,6 +206,7 @@ class ServiceConfig:
     # Zone selection
     zones_mode: str = "auto"  # "auto" or "list"
     zones_list: Sequence[int] = field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
+    zone_names: dict = field(default_factory=lambda: {str(z): f"Zone {z}" for z in range(1, 7)})
 
     # Logging
     flush_each_line: bool = True
@@ -241,6 +242,7 @@ class ServiceConfig:
             "rampsoak_hz": self.rampsoak_hz,
             "zones_mode": self.zones_mode,
             "zones_list": list(self.zones_list),
+            "zone_names": dict(self.zone_names),
             "flush_each_line": self.flush_each_line,
             "analysis_hz": self.analysis_hz,
             "gui_refresh_hz": self.gui_refresh_hz,
@@ -261,12 +263,12 @@ class ServiceConfig:
     @staticmethod
     def from_dict(d: dict) -> "ServiceConfig":
         cfg = ServiceConfig()
-        for k in ["telemetry_hz","config_hz","rampsoak_hz","analysis_hz","gui_refresh_hz",
-          "equilibrium_window_s","equilibrium_threshold_c",
-          "zones_mode","zones_list","flush_each_line",
-          "last_serial_port","last_serial_params","last_tcp_host","last_tcp_port",
-          "viewer_history_hours","viewer_line_width",
-          "viewer_pv_color","viewer_sp_color","viewer_sp_autotune_color"]:
+        for k in ["telemetry_hz", "config_hz", "rampsoak_hz", "analysis_hz", "gui_refresh_hz",
+                  "equilibrium_window_s", "equilibrium_threshold_c",
+                  "zones_mode", "zones_list", "zone_names", "flush_each_line",
+                  "last_serial_port", "last_serial_params", "last_tcp_host", "last_tcp_port",
+                  "viewer_history_hours", "viewer_line_width",
+                  "viewer_pv_color", "viewer_sp_color", "viewer_sp_autotune_color"]:
             if k in d:
                 setattr(cfg, k, d[k])
         # normalize
@@ -275,6 +277,21 @@ class ServiceConfig:
         cfg.rampsoak_hz = float(cfg.rampsoak_hz)
         cfg.zones_mode = str(cfg.zones_mode)
         cfg.zones_list = list(cfg.zones_list) if isinstance(cfg.zones_list, (list, tuple)) else [1, 2, 3, 4, 5, 6]
+        if isinstance(cfg.zone_names, dict):
+            normalized = {}
+            for z in range(1, 7):
+                raw = cfg.zone_names.get(str(z), cfg.zone_names.get(z, f"Zone {z}"))
+                name = str(raw).strip() if raw is not None else ""
+                normalized[str(z)] = name or f"Zone {z}"
+            cfg.zone_names = normalized
+        elif isinstance(cfg.zone_names, (list, tuple)):
+            normalized = {str(z): f"Zone {z}" for z in range(1, 7)}
+            for idx, raw in enumerate(cfg.zone_names[:6], start=1):
+                name = str(raw).strip() if raw is not None else ""
+                normalized[str(idx)] = name or f"Zone {idx}"
+            cfg.zone_names = normalized
+        else:
+            cfg.zone_names = {str(z): f"Zone {z}" for z in range(1, 7)}
         cfg.flush_each_line = bool(cfg.flush_each_line)
         cfg.analysis_hz = float(cfg.analysis_hz)
         cfg.gui_refresh_hz = float(cfg.gui_refresh_hz)

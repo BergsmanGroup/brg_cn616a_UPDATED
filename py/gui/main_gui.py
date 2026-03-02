@@ -150,6 +150,9 @@ class CN616AGUI:
 
     def _on_service_config_changed(self, cfg):
         """Apply GUI refresh rate changes from service config to running panels."""
+        if self.chart_panel is not None and hasattr(self.chart_panel, "apply_service_config"):
+            self.chart_panel.apply_service_config(cfg)
+
         try:
             gui_refresh_hz = float(cfg.get("gui_refresh_hz", 0) or 0)
         except Exception:
