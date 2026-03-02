@@ -1,0 +1,225 @@
+{
+  "map_version": "cn616a_modbus_map_v1",
+  "device": {
+    "model": "Omega CN616A",
+    "channels": 6,
+    "zones_max_reported": [6, 12]
+  },
+  "protocol": {
+    "transport": "Modbus RTU",
+    "holding_register_base": 40000,
+    "byte_order": "big_endian",
+    "word_order_32bit": "MSW_first",
+    "function_codes": {
+      "read_holding": 3,
+      "write_single": 6,
+      "write_multiple": 16
+    },
+    "data_types": {
+      "R": { "registers": 1, "bits": 16, "notes": "bool/byte/char/int16/uint16" },
+      "L": { "registers": 2, "bits": 32, "notes": "int32/uint32, MSW first" },
+      "F": { "registers": 2, "bits": 32, "notes": "IEEE-754 float, MSW first" },
+      "B": { "registers": "n", "bits": "8n", "notes": "byte array" }
+    },
+    "dual_register_access_rules": {
+      "read_fc03": "Request starting at the lower-numbered (base) register and read at least 2 registers.",
+      "write_fc16": "Write starting at the lower-numbered (base) register and write at least 2 registers.",
+      "split_read_fc03": "If split into single-register reads, you must read base first; reading the next reg returns the buffered LSW bytes.",
+      "split_write_fc06": "If split into single-register writes, writing base buffers but does not commit; writing the next reg commits the full 32-bit value."
+    }
+  },
+  "registers": {
+    "system": [
+      { "index_hex": "0x0001", "holding_register": 40001, "type": "R", "access": "R", "name": "device_description" },
+      { "index_hex": "0x0002", "holding_register": 40002, "type": "R", "access": "R", "name": "fw_version_major_minor" },
+      { "index_hex": "0x0003", "holding_register": 40003, "type": "R", "access": "R", "name": "fw_version_minor_fix" },
+      { "index_hex": "0x0005", "holding_register": 40005, "type": "R", "access": "R", "name": "max_zones" },
+      { "index_hex": "0x0006", "holding_register": 40006, "type": "R", "access": "RW", "name": "temperature_scale", "enum": "process_unit" },
+      { "index_hex": "0x0007", "holding_register": 40007, "type": "R", "access": "RW", "name": "sensor_type", "enum": "sensor_type" },
+      { "index_hex": "0x0008", "holding_register": 40008, "type": "R", "access": "RW", "name": "sensor_subtype", "enum_hint": "thermocouple_type_or_rtd_type" },
+      { "index_hex": "0x0009", "holding_register": 40009, "type": "R", "access": "RW", "name": "password" },
+      { "index_hex": "0x000a", "holding_register": 40010, "type": "R", "access": "RW", "name": "modbus_address" },
+      { "index_hex": "0x000b", "holding_register": 40011, "type": "R", "access": "RW", "name": "scan_time_seconds" },
+      { "index_hex": "0x000c", "holding_register": 40012, "type": "R", "access": "RW", "name": "active_zone_bitmap" },
+      { "index_hex": "0x0015", "holding_register": 40021, "type": "R", "access": "RW", "name": "system_state", "enum": "system_state" },
+      { "index_hex": "0x0016", "holding_register": 40022, "type": "R", "access": "RW", "name": "startup_state", "enum": "system_state" },
+      { "index_hex": "0x0018", "holding_register": 40024, "type": "R", "access": "RW", "name": "system_alarm_type", "enum": "alarm_type" },
+      { "index_hex": "0x0019", "holding_register": 40025, "type": "R", "access": "RW", "name": "system_alarm_latch", "enum": "setting_toggle" },
+      { "index_hex": "0x001a", "holding_register": 40026, "type": "R", "access": "RW", "name": "password_enable", "enum": "setting_toggle" },
+      { "index_hex": "0x001b", "holding_register": 40027, "type": "R", "access": "RW", "name": "decimal_point", "enum": "decimal_point" }
+    ],
+    "temperature_pv": {
+      "description": "Per-zone Process Value (PV)",
+      "zone_count_max": 12,
+      "pattern": {
+        "zone_1_index_hex": "0x0100",
+        "index_step_hex": "0x0002",
+        "type": "F",
+        "access": "R",
+        "name": "pv"
+      }
+    },
+    "sensor_status": {
+      "description": "Per-zone sensor status + bitmaps",
+      "zone_1_index_hex": "0x0180",
+      "zone_step_hex": "0x0001",
+      "type": "R",
+      "access": "R",
+      "enum": "sensor_status",
+      "bitmaps": [
+        { "index_hex": "0x018c", "holding_register": 40396, "type": "R", "access": "R", "name": "sensor_status_bitmap" },
+        { "index_hex": "0x018d", "holding_register": 40397, "type": "R", "access": "R", "name": "alarm_status_bitmap" }
+      ]
+    },
+    "zone_registers": {
+      "description": "Zone-specific registers repeated for up to 12 zones",
+      "zone_bases_index_hex": {
+        "1": "0x0200",
+        "2": "0x0280",
+        "3": "0x0300",
+        "4": "0x0380",
+        "5": "0x0400",
+        "6": "0x0480",
+        "7": "0x0500",
+        "8": "0x0580",
+        "9": "0x0600",
+        "10": "0x0680",
+        "11": "0x0700",
+        "12": "0x0780"
+      },
+      "fields": [
+        { "offset_hex": "0x00", "type": "F", "access": "RW", "name": "alarm_sp_high", "default": 9000.0 },
+        { "offset_hex": "0x02", "type": "F", "access": "RW", "name": "alarm_sp_low", "default": -900.0 },
+        { "offset_hex": "0x04", "type": "R", "access": "RW", "name": "alarm1_mode", "enum": "alarm_type" },
+        { "offset_hex": "0x05", "type": "R", "access": "RW", "name": "alarm1_latch", "enum": "setting_toggle" },
+        { "offset_hex": "0x06", "type": "R", "access": "RW", "name": "alarm1_status", "enum": "alarm_status" },
+        { "offset_hex": "0x07", "type": "R", "access": "RW", "name": "alarm2_mode", "enum": "alarm_type" },
+        { "offset_hex": "0x08", "type": "R", "access": "RW", "name": "alarm2_latch", "enum": "setting_toggle" },
+        { "offset_hex": "0x09", "type": "R", "access": "RW", "name": "alarm2_status", "enum": "alarm_status" },
+        { "offset_hex": "0x0a", "type": "F", "access": "RW", "name": "current_scale_high", "default": 20.0 },
+        { "offset_hex": "0x0c", "type": "F", "access": "RW", "name": "current_scale_low", "default": 4.0 },
+        { "offset_hex": "0x0e", "type": "F", "access": "RW", "name": "voltage_scale_high", "default": 1000.0 },
+        { "offset_hex": "0x10", "type": "F", "access": "RW", "name": "voltage_scale_low", "default": 0.0 }
+      ]
+    },
+    "pid_registers": {
+      "description": "PID/control registers repeated for zones 1..6",
+      "supported_zones": 6,
+      "zone_bases_index_hex": {
+        "1": "0x0800",
+        "2": "0x0880",
+        "3": "0x0900",
+        "4": "0x0980",
+        "5": "0x0a00",
+        "6": "0x0a80"
+      },
+      "fields": [
+        { "offset_hex": "0x00", "type": "R", "access": "RW", "name": "start_profile", "enum": "setting_toggle" },
+        { "offset_hex": "0x01", "type": "R", "access": "RW", "name": "control_action", "enum": "output_action" },
+        { "offset_hex": "0x02", "type": "R", "access": "RW", "name": "control_method", "enum": "control_method" },
+        { "offset_hex": "0x03", "type": "R", "access": "RW", "name": "num_segments", "default": 1 },
+        { "offset_hex": "0x04", "type": "R", "access": "R", "name": "current_segment_index" },
+        { "offset_hex": "0x05", "type": "R", "access": "R", "name": "current_segment_state", "enum": "segment_state" },
+        { "offset_hex": "0x06", "type": "F", "access": "RW", "name": "deadband", "default": 0.0 },
+        { "offset_hex": "0x08", "type": "F", "access": "RW", "name": "sp_abs", "default": 0.0 },
+        { "offset_hex": "0x0a", "type": "F", "access": "RW", "name": "sp_ctl", "default": 0.0 },
+        { "offset_hex": "0x0c", "type": "F", "access": "RW", "name": "p_gain", "default": 1.0 },
+        { "offset_hex": "0x0e", "type": "F", "access": "RW", "name": "i_gain", "default": 0.0 },
+        { "offset_hex": "0x10", "type": "F", "access": "RW", "name": "d_gain", "default": 0.0 },
+        { "offset_hex": "0x12", "type": "F", "access": "RW", "name": "out_pct", "default": 0.0 },
+        { "offset_hex": "0x14", "type": "F", "access": "RW", "name": "cycle_time_s", "default": 5.0, "notes": "Applies to all zones" },
+        { "offset_hex": "0x16", "type": "R", "access": "RW", "name": "autotune_enable", "enum": "autotune_control" },
+        { "offset_hex": "0x17", "type": "R", "access": "R", "name": "loop_status", "enum": "loop_status" },
+        { "offset_hex": "0x18", "type": "F", "access": "RW", "name": "autotune_sp", "default": 0.0 },
+        { "offset_hex": "0x1a", "type": "R", "access": "RW", "name": "control_mode", "enum": "control_mode" },
+        { "offset_hex": "0x1b", "type": "F", "access": "R", "name": "ramp_soak_remaining" }
+      ]
+    },
+    "profile_registers": {
+      "description": "Ramp/Soak profile registers for zones 1..6, 20 segments, 3 parameters per segment",
+      "supported_zones": 6,
+      "profile_bases_index_hex": {
+        "1": "0x1000",
+        "2": "0x1100",
+        "3": "0x1200",
+        "4": "0x1300",
+        "5": "0x1400",
+        "6": "0x1500"
+      },
+      "segment_offsets_hex": {
+        "segment_1": "0x00",
+        "segment_20": "0x13"
+      },
+      "formula": "addr = base + 6*segment_offset + field_offset",
+      "fields": [
+        { "field_offset_hex": "0x00", "type": "F", "access": "RW", "name": "seg_sp", "default": 0.0 },
+        { "field_offset_hex": "0x02", "type": "F", "access": "RW", "name": "seg_slope_deg_per_min", "default": 10.0 },
+        { "field_offset_hex": "0x04", "type": "F", "access": "RW", "name": "seg_time_hours", "default": 1.0 }
+      ]
+    },
+    "user_calibration": {
+      "description": "Per-zone RTD offset (Ohms)",
+      "zone_1_index_hex": "0x1d7c",
+      "zone_step_hex": "0x0002",
+      "type": "F",
+      "access": "RW",
+      "name": "rtd_offset_ohm",
+      "default": 0.0,
+      "zone_count_max": 12
+    }
+  },
+  "enums": {
+    "sensor_type": {
+      "0": "THERMOCOUPLE",
+      "1": "RTD2_WIRE",
+      "2": "RTD3_WIRE_NOT_SUPPORTED",
+      "3": "CURRENT",
+      "4": "VOLTAGE"
+    },
+    "rtd_type": { "0": "PT_100", "1": "NI_120", "2": "CU_10" },
+    "thermocouple_type": {
+      "0": "TYPE_B",
+      "1": "TYPE_C",
+      "2": "TYPE_E",
+      "3": "TYPE_J",
+      "4": "TYPE_K",
+      "5": "TYPE_R",
+      "6": "TYPE_S",
+      "7": "TYPE_T",
+      "8": "TYPE_N"
+    },
+    "sensor_status": {
+      "0": "VALID",
+      "1": "OUT_OF_RANGE_LOW",
+      "2": "OUT_OF_RANGE_HIGH",
+      "3": "SHORT_CIRCUIT",
+      "4": "OPEN_CIRCUIT"
+    },
+    "decimal_point": { "0": "DECIMAL_POINT_ZERO", "1": "DECIMAL_POINT_ONE", "2": "DECIMAL_POINT_TWO", "3": "DECIMAL_POINT_THREE" },
+    "system_state": { "0": "RUN_MODE", "1": "IDLE_MODE" },
+    "process_unit": { "0": "DEGREE_C", "1": "DEGREE_F" },
+    "alarm_type": {
+      "0": "ALARM_HIGH",
+      "1": "ALARM_LOW",
+      "2": "HI_LOW_ALARM",
+      "3": "ALARM_OFF",
+      "4": "ALARM_SPLIT_A_B"
+    },
+    "alarm_status": { "0": "ALARM_NONE", "1": "ALARM_HIGH", "2": "ALARM_LOW", "3": "ALARM_HIGH_LOW" },
+    "setting_toggle": { "0": "DISABLE", "1": "ENABLE" },
+    "output_action": { "0": "ACTION_REVERSE", "1": "ACTION_DIRECT" },
+    "control_mode": { "0": "STANDARD_CONTROL", "1": "RAMP_SOAK_1_STOP", "2": "RAMP_SOAK_2_HOLD" },
+    "control_method": { "0": "ON_OFF_CONTROL", "1": "PID_CONTROL" },
+    "autotune_control": { "0": "DISABLE", "1": "ENABLE" },
+    "segment_state": { "0": "IDLE", "1": "RAMPING", "2": "SOAKING", "3": "HOLDING" },
+    "loop_status": {
+      "0": "STOPPED",
+      "1": "IDLE",
+      "2": "STANDARD",
+      "3": "RAMP_SOAK",
+      "4": "AUTOTUNE_STAGE_1",
+      "5": "AUTOTUNE_STAGE_2",
+      "6": "AUTOTUNE_STAGE_3"
+    }
+  }
+}
