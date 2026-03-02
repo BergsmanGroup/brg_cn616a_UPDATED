@@ -13,6 +13,8 @@ import threading
 import time
 import traceback
 import json
+import socket
+import uuid
 from datetime import datetime
 
 from .state_reader import (
@@ -75,6 +77,7 @@ class TelemetryPanel(StatePanel):
         super().__init__(parent, logs_dir, debug=debug)
         self.create_widgets()
         self.zone_labels = {}
+        self.zone_frames = {}
     
     def create_widgets(self):
         # Header
@@ -105,6 +108,8 @@ class TelemetryPanel(StatePanel):
         canvas.configure(yscrollcommand=scrollbar.set)
         
         self.zones_container = scrollable_frame
+        for col in range(3):
+            self.zones_container.columnconfigure(col, weight=1)
         
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -278,19 +283,24 @@ class TelemetryPanel(StatePanel):
             zones_data = telemetry.get("zones", {})
             
             # Clear old labels if needed
-            if len(self.zone_labels) != len(zones_data):
+            if set(self.zone_labels.keys()) != set(zones_data.keys()):
                 for widget in self.zones_container.winfo_children():
                     widget.destroy()
                 self.zone_labels.clear()
+                self.zone_frames.clear()
             
             # Update or create zone displays
-            for zone_id in sorted(zones_data.keys(), key=lambda x: int(x) if x.isdigit() else 999):
+            sorted_zone_ids = sorted(zones_data.keys(), key=lambda x: int(x) if x.isdigit() else 999)
+            for idx, zone_id in enumerate(sorted_zone_ids):
                 if zone_id not in self.zone_labels:
                     zone_frame = ttk.LabelFrame(self.zones_container, text=f"Zone {zone_id}")
-                    zone_frame.pack(fill=tk.X, pady=5)
-                    label = ttk.Label(zone_frame, text="", justify=tk.LEFT, font=("Courier", 9))
+                    row = idx // 3
+                    col = idx % 3
+                    zone_frame.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
+                    label = ttk.Label(zone_frame, text="", justify=tk.LEFT, font=("Courier", 8))
                     label.pack(padx=10, pady=5)
                     self.zone_labels[zone_id] = label
+                    self.zone_frames[zone_id] = zone_frame
                 
                 # Get telemetry, analysis, and config data for this zone
                 zone_data = zones_data[zone_id]
@@ -313,10 +323,13 @@ class TelemetryPanel(StatePanel):
 class ConfigPanel(StatePanel):
     """Display configuration: system settings and zone alarms."""
     
-    def __init__(self, parent, logs_dir: Path, debug: bool = False, on_viewer_config_changed=None):
+    def __init__(self, parent, logs_dir: Path, debug: bool = False, on_viewer_config_changed=None, on_service_config_changed=None):
         super().__init__(parent, logs_dir, debug=debug)
         self.on_viewer_config_changed = on_viewer_config_changed
-        self._viewer_dirty_keys = set()
+        self.on_service_config_changed = on_service_config_changed
+        self._service_cfg_cache = {}
+        self._form_updating = False
+        self._form_dirty = False
         self.create_widgets()
     
     def create_widgets(self):
@@ -351,27 +364,136 @@ class ConfigPanel(StatePanel):
         # widgets for service tab
         self.service_info_label = ttk.Label(self.service_frame, text="", font=("Arial", 9))
         self.service_info_label.pack(fill=tk.X, padx=10)
-        self.service_label = ttk.Label(self.service_frame, text="", justify=tk.LEFT, font=("Courier", 9))
-        self.service_label.pack(padx=10, pady=10, anchor="nw")
-        
-        # viewer config form (history, colors, width)
-        self.viewer_frame = ttk.Frame(self.service_frame)
-        self.viewer_frame.pack(fill=tk.X, padx=10, pady=5)
-        # entries dictionary
-        self._viewer_entries = {}
-        labels = ["History (hrs)", "Line width", "PV color", "SP color", "SP autotune color"]
-        keys = ["history_hours", "line_width", "pv_color", "sp_color", "sp_autotune_color"]
-        for i,(lbl,key) in enumerate(zip(labels, keys)):
-            ttk.Label(self.viewer_frame, text=lbl+":").grid(row=i, column=0, sticky="e", pady=2)
-            ent = ttk.Entry(self.viewer_frame, width=15)
-            ent.grid(row=i, column=1, pady=2, sticky="w")
-            ent.bind("<KeyRelease>", lambda _e, k=key: self._viewer_dirty_keys.add(k))
-            ent.bind("<Return>", self._on_viewer_enter)
-            ent.bind("<KP_Enter>", self._on_viewer_enter)
-            self._viewer_entries[key] = ent
-        save_btn = ttk.Button(self.viewer_frame, text="Save viewer settings", command=self._save_viewer_settings)
-        save_btn.grid(row=len(labels), column=0, columnspan=2, pady=5)
-        
+        self.service_status_label = ttk.Label(self.service_frame, text="", font=("Arial", 9), foreground="gray")
+        self.service_status_label.pack(fill=tk.X, padx=10, pady=(0, 6))
+
+        self.service_actions_frame = ttk.Frame(self.service_frame)
+        self.service_actions_frame.pack(fill=tk.X, padx=10, pady=(0, 6))
+        ttk.Button(self.service_actions_frame, text="Apply Service Settings", command=self._on_apply_settings_clicked).pack(side=tk.RIGHT)
+
+        self.service_form_frame = ttk.Frame(self.service_frame)
+        self.service_form_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.service_form_frame.columnconfigure(0, weight=1)
+        self.service_form_frame.columnconfigure(1, weight=1)
+
+        # ---- Connection section ----
+        connection_box = ttk.LabelFrame(self.service_form_frame, text="Connection")
+        connection_box.grid(row=0, column=0, columnspan=2, sticky="ew", padx=(0, 0), pady=(0, 8))
+
+        self.conn_serial_port = ttk.Entry(connection_box, width=18)
+        self.conn_baudrate = ttk.Entry(connection_box, width=18)
+        self.conn_parity = ttk.Combobox(connection_box, width=15, state="readonly", values=["N", "E", "O"])
+        self.conn_stopbits = ttk.Combobox(connection_box, width=15, state="readonly", values=["1", "2"])
+        self.conn_bytesize = ttk.Combobox(connection_box, width=15, state="readonly", values=["7", "8"])
+        self.conn_timeout = ttk.Entry(connection_box, width=18)
+        self.conn_tcp_host = ttk.Entry(connection_box, width=18)
+        self.conn_tcp_port = ttk.Entry(connection_box, width=18)
+
+        connection_rows = [
+            ("Serial port", self.conn_serial_port),
+            ("Baudrate", self.conn_baudrate),
+            ("Parity", self.conn_parity),
+            ("Stop bits", self.conn_stopbits),
+            ("Byte size", self.conn_bytesize),
+            ("Timeout (s)", self.conn_timeout),
+            ("Service host", self.conn_tcp_host),
+            ("Service TCP port", self.conn_tcp_port),
+        ]
+        for row, (label, widget) in enumerate(connection_rows):
+            ttk.Label(connection_box, text=label + ":").grid(row=row, column=0, sticky="e", padx=(8, 8), pady=3)
+            widget.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=3)
+            if isinstance(widget, ttk.Entry):
+                widget.bind("<KeyRelease>", self._on_form_edited)
+                widget.bind("<FocusOut>", self._on_form_edited)
+            else:
+                widget.bind("<<ComboboxSelected>>", self._on_form_edited)
+
+        conn_btn_row = len(connection_rows)
+        ttk.Button(connection_box, text="Connect", command=self._on_connect_clicked).grid(row=conn_btn_row, column=0, pady=(6, 8), padx=8, sticky="e")
+        ttk.Button(connection_box, text="Disconnect", command=self._on_disconnect_clicked).grid(row=conn_btn_row, column=1, pady=(6, 8), padx=(0, 8), sticky="w")
+        ttk.Button(connection_box, text="Refresh Connection", command=self._on_refresh_connection_clicked).grid(row=conn_btn_row, column=2, pady=(6, 8), padx=(0, 8), sticky="w")
+
+        # ---- Polling section ----
+        polling_box = ttk.LabelFrame(self.service_form_frame, text="Polling")
+        polling_box.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
+
+        self.polling_telemetry_hz = ttk.Entry(polling_box, width=18)
+        self.polling_config_hz = ttk.Entry(polling_box, width=18)
+        self.polling_rampsoak_hz = ttk.Entry(polling_box, width=18)
+        self.polling_analysis_hz = ttk.Entry(polling_box, width=18)
+        self.polling_gui_refresh_hz = ttk.Entry(polling_box, width=18)
+        self.polling_eq_window = ttk.Entry(polling_box, width=18)
+        self.polling_eq_threshold = ttk.Entry(polling_box, width=18)
+
+        polling_rows = [
+            ("Telemetry (Hz)", self.polling_telemetry_hz),
+            ("Config (Hz)", self.polling_config_hz),
+            ("Ramp/Soak (Hz)", self.polling_rampsoak_hz),
+            ("Analysis (Hz)", self.polling_analysis_hz),
+            ("GUI refresh (Hz)", self.polling_gui_refresh_hz),
+            ("Equilibrium window (s)", self.polling_eq_window),
+            ("Equilibrium threshold (°C)", self.polling_eq_threshold),
+        ]
+        for row, (label, widget) in enumerate(polling_rows):
+            ttk.Label(polling_box, text=label + ":").grid(row=row, column=0, sticky="e", padx=(8, 8), pady=3)
+            widget.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=3)
+            widget.bind("<KeyRelease>", self._on_form_edited)
+            widget.bind("<FocusOut>", self._on_form_edited)
+
+        self.flush_each_line_var = tk.BooleanVar(value=False)
+        flush_check = ttk.Checkbutton(
+            polling_box,
+            text="Flush each log line",
+            variable=self.flush_each_line_var,
+            command=self._on_form_edited,
+        )
+        flush_check.grid(row=len(polling_rows), column=1, sticky="w", padx=(0, 8), pady=(3, 8))
+
+        # ---- Zones section ----
+        zones_box = ttk.LabelFrame(self.service_form_frame, text="Zones")
+        zones_box.grid(row=2, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
+
+        self.zones_mode_var = tk.StringVar(value="auto")
+        self.zones_list_entry = ttk.Entry(zones_box, width=26)
+
+        ttk.Label(zones_box, text="Mode:").grid(row=0, column=0, sticky="e", padx=(8, 8), pady=3)
+        mode_frame = ttk.Frame(zones_box)
+        mode_frame.grid(row=0, column=1, sticky="w", padx=(0, 8), pady=3)
+        ttk.Radiobutton(mode_frame, text="Auto", variable=self.zones_mode_var, value="auto", command=self._on_form_edited).pack(side=tk.LEFT)
+        ttk.Radiobutton(mode_frame, text="List", variable=self.zones_mode_var, value="list", command=self._on_form_edited).pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Label(zones_box, text="Zone list:").grid(row=1, column=0, sticky="e", padx=(8, 8), pady=3)
+        self.zones_list_entry.grid(row=1, column=1, sticky="w", padx=(0, 8), pady=3)
+        self.zones_list_entry.bind("<KeyRelease>", self._on_form_edited)
+        self.zones_list_entry.bind("<FocusOut>", self._on_form_edited)
+
+        # ---- Viewer section ----
+        viewer_box = ttk.LabelFrame(self.service_form_frame, text="Viewer Settings")
+        viewer_box.grid(row=1, column=1, rowspan=2, sticky="nsew", padx=(6, 0), pady=(0, 8))
+
+        self.viewer_history_hours = ttk.Entry(viewer_box, width=18)
+        self.viewer_line_width = ttk.Entry(viewer_box, width=18)
+        color_options = ["black", "blue", "red", "green", "orange", "purple", "gray"]
+        self.viewer_pv_color = ttk.Combobox(viewer_box, width=15, state="readonly", values=color_options)
+        self.viewer_sp_color = ttk.Combobox(viewer_box, width=15, state="readonly", values=color_options)
+        self.viewer_sp_autotune_color = ttk.Combobox(viewer_box, width=15, state="readonly", values=color_options)
+
+        viewer_rows = [
+            ("History (s)", self.viewer_history_hours),
+            ("Line width", self.viewer_line_width),
+            ("PV color", self.viewer_pv_color),
+            ("SP color", self.viewer_sp_color),
+            ("SP autotune color", self.viewer_sp_autotune_color),
+        ]
+        for row, (label, widget) in enumerate(viewer_rows):
+            ttk.Label(viewer_box, text=label + ":").grid(row=row, column=0, sticky="e", padx=(8, 8), pady=3)
+            widget.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=3)
+            if isinstance(widget, ttk.Entry):
+                widget.bind("<KeyRelease>", self._on_form_edited)
+                widget.bind("<FocusOut>", self._on_form_edited)
+            else:
+                widget.bind("<<ComboboxSelected>>", self._on_form_edited)
+
         self.zone_config_labels = {}
     
     def refresh(self):
@@ -402,12 +524,11 @@ class ConfigPanel(StatePanel):
             svc_cfg = svc_state.get("config", {})
             self.service_info_label.config(text=f"Last update: {format_timestamp(svc_ts)}")
             if not svc_cfg:
-                self.service_label.config(text="No service config data available")
+                self.service_status_label.config(text="No service config data available", foreground="gray")
             else:
-                self.service_label.config(text=self._format_service_config(svc_cfg))
-                # populate viewer settings form if present
-                viewer = self._extract_viewer_from_cfg(svc_cfg)
-                self._populate_viewer_form(viewer)
+                self._service_cfg_cache = dict(svc_cfg)
+                if not self._form_dirty:
+                    self._populate_service_form(svc_cfg)
         
         except TypeError as e:
             error_msg = f"Type Error - {str(e)}\n{traceback.format_exc()}"
@@ -418,17 +539,68 @@ class ConfigPanel(StatePanel):
             print(f"[ConfigPanel.refresh] {error_msg}")
             self.info_label.config(text=f"Error: {str(e)}")
     
-    def _populate_viewer_form(self, viewer: Dict[str, Any]):
-        """Fill the viewer settings entries from a dict."""
-        # viewer may contain history_hours, line_width, pv_color, sp_color, sp_autotune_color
-        focused_widget = self.focus_get()
-        for key, entry in self._viewer_entries.items():
-            if key in self._viewer_dirty_keys or focused_widget is entry:
-                continue
-            val = viewer.get(key)
-            if val is not None:
-                entry.delete(0, tk.END)
-                entry.insert(0, str(val))
+    def _set_entry_text(self, entry: ttk.Entry, value: Any):
+        focused_widget = self._safe_focus_get()
+        if focused_widget is entry:
+            return
+        entry.delete(0, tk.END)
+        entry.insert(0, "" if value is None else str(value))
+
+    def _set_combo_value(self, combo: ttk.Combobox, value: Any):
+        if self._safe_focus_get() is combo:
+            return
+        if value is None:
+            return
+        combo.set(str(value))
+
+    def _safe_focus_get(self):
+        try:
+            return self.focus_get()
+        except Exception:
+            return None
+
+    def _populate_service_form(self, cfg: Dict[str, Any]):
+        self._form_updating = True
+        try:
+            params = cfg.get("last_serial_params", {}) if isinstance(cfg.get("last_serial_params", {}), dict) else {}
+
+            self._set_entry_text(self.conn_serial_port, cfg.get("last_serial_port", ""))
+            self._set_entry_text(self.conn_baudrate, params.get("baudrate", 115200))
+            self._set_combo_value(self.conn_parity, params.get("parity", "N"))
+            self._set_combo_value(self.conn_stopbits, params.get("stopbits", 1))
+            self._set_combo_value(self.conn_bytesize, params.get("bytesize", 8))
+            self._set_entry_text(self.conn_timeout, params.get("timeout", 1.0))
+            self._set_entry_text(self.conn_tcp_host, cfg.get("last_tcp_host", "127.0.0.1"))
+            self._set_entry_text(self.conn_tcp_port, cfg.get("last_tcp_port", 8765))
+
+            self._set_entry_text(self.polling_telemetry_hz, cfg.get("telemetry_hz", 2.0))
+            self._set_entry_text(self.polling_config_hz, cfg.get("config_hz", 0.2))
+            self._set_entry_text(self.polling_rampsoak_hz, cfg.get("rampsoak_hz", 0.0))
+            self._set_entry_text(self.polling_analysis_hz, cfg.get("analysis_hz", 1.0))
+            self._set_entry_text(self.polling_gui_refresh_hz, cfg.get("gui_refresh_hz", 2.0))
+            self._set_entry_text(self.polling_eq_window, cfg.get("equilibrium_window_s", 30.0))
+            self._set_entry_text(self.polling_eq_threshold, cfg.get("equilibrium_threshold_c", 0.25))
+            self.flush_each_line_var.set(bool(cfg.get("flush_each_line", False)))
+
+            zones_mode = str(cfg.get("zones_mode", "auto") or "auto")
+            self.zones_mode_var.set("list" if zones_mode == "list" else "auto")
+            zones_list = cfg.get("zones_list", [1, 2, 3, 4, 5, 6])
+            if isinstance(zones_list, (list, tuple)):
+                zones_text = ",".join(str(z) for z in zones_list)
+            else:
+                zones_text = ""
+            self._set_entry_text(self.zones_list_entry, zones_text)
+
+            viewer = self._extract_viewer_from_cfg(cfg)
+            history_hours = float(viewer.get("history_hours", 1.0) or 1.0)
+            self._set_entry_text(self.viewer_history_hours, history_hours * 3600.0)
+            self._set_entry_text(self.viewer_line_width, viewer.get("line_width", 2.5))
+            self._set_combo_value(self.viewer_pv_color, viewer.get("pv_color", "blue"))
+            self._set_combo_value(self.viewer_sp_color, viewer.get("sp_color", "red"))
+            self._set_combo_value(self.viewer_sp_autotune_color, viewer.get("sp_autotune_color", "purple"))
+            self._form_dirty = False
+        finally:
+            self._form_updating = False
 
     def _extract_viewer_from_cfg(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
         """Read viewer settings from nested viewer object or legacy flat keys."""
@@ -445,56 +617,202 @@ class ConfigPanel(StatePanel):
             viewer["sp_autotune_color"] = cfg.get("viewer_sp_autotune_color")
         return viewer
 
-    def _on_viewer_enter(self, _event=None):
-        self._save_viewer_settings()
-        return "break"
-        
-    def _save_viewer_settings(self):
-        """Gather form values, write to service config state file and notify callback."""
-        # read existing state
-        path = self.logs_dir / "cn616a_service_config_state.json"
+    def _safe_float(self, value: str) -> Optional[float]:
+        text = str(value).strip()
+        if text == "":
+            return None
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                state = json.load(f)
-        except Exception:
-            state = {}
-        cfg = state.get("config", {})
-        viewer = self._extract_viewer_from_cfg(cfg)
-        # collect from entries
-        for key, entry in self._viewer_entries.items():
-            text = entry.get().strip()
-            if text == "":
-                continue
-            # convert numeric where appropriate
-            if key in ("history_hours", "line_width"):
-                try:
-                    val = float(text)
-                except ValueError:
-                    val = None
-            else:
-                val = text
-            if val is not None:
-                viewer[key] = val
-        cfg["viewer"] = viewer
-        # Keep legacy flat keys in sync for service compatibility
-        cfg["viewer_history_hours"] = viewer.get("history_hours", cfg.get("viewer_history_hours", 1.0))
-        cfg["viewer_line_width"] = viewer.get("line_width", cfg.get("viewer_line_width", 2.5))
-        cfg["viewer_pv_color"] = viewer.get("pv_color", cfg.get("viewer_pv_color", "blue"))
-        cfg["viewer_sp_color"] = viewer.get("sp_color", cfg.get("viewer_sp_color", "red"))
-        cfg["viewer_sp_autotune_color"] = viewer.get("sp_autotune_color", cfg.get("viewer_sp_autotune_color", "purple"))
-        state["config"] = cfg
-        state["ts"] = datetime.now().astimezone().isoformat(timespec="milliseconds")
-        # write back
+            return float(text)
+        except ValueError:
+            return None
+
+    def _safe_int(self, value: str) -> Optional[int]:
+        text = str(value).strip()
+        if text == "":
+            return None
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-            self.service_label.config(text=self._format_service_config(cfg))
-            self.service_info_label.config(text=f"Last update: {format_timestamp(state.get('ts'))}")
-            self._viewer_dirty_keys.clear()
-            if self.on_viewer_config_changed:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _get_service_endpoint(self) -> tuple[str, int]:
+        host = self.conn_tcp_host.get().strip() or "127.0.0.1"
+        port = self._safe_int(self.conn_tcp_port.get())
+        if port is None:
+            port = int(self._service_cfg_cache.get("last_tcp_port", 8765) or 8765)
+        return host, port
+
+    def _send_service_cmd(self, op: str, **fields) -> Dict[str, Any]:
+        host, port = self._get_service_endpoint()
+        msg = {"id": uuid.uuid4().hex[:8], "op": op}
+        msg.update(fields)
+        data = (json.dumps(msg) + "\n").encode("utf-8")
+        with socket.create_connection((host, port), timeout=2.0) as s:
+            s.sendall(data)
+            s.settimeout(2.0)
+            resp = s.recv(65536).decode("utf-8", errors="ignore").strip()
+        return json.loads(resp) if resp else {"ok": False, "error": "empty response"}
+
+    def _set_service_status(self, message: str, ok: bool = True):
+        self.service_status_label.config(text=message, foreground=("green" if ok else "red"))
+
+    def _on_form_edited(self, _event=None):
+        if self._form_updating:
+            return
+        self._form_dirty = True
+        self.service_status_label.config(text="Unsaved changes", foreground="orange")
+
+    def _apply_service_patch(self, patch: Dict[str, Any], *, notify_viewer: bool = False):
+        if self._form_updating:
+            return
+        if not patch:
+            return
+        try:
+            resp = self._send_service_cmd("set_service_config", patch=patch)
+            if not resp.get("ok"):
+                self._set_service_status(f"Apply failed: {resp.get('error', 'unknown error')}", ok=False)
+                return
+
+            cfg = resp.get("service_config", {})
+            if isinstance(cfg, dict):
+                self._service_cfg_cache = dict(cfg)
+                self._populate_service_form(cfg)
+
+            self._set_service_status("Settings applied", ok=True)
+            self._form_dirty = False
+
+            if notify_viewer and self.on_viewer_config_changed:
+                viewer = self._extract_viewer_from_cfg(self._service_cfg_cache)
                 self.on_viewer_config_changed(viewer)
+            if self.on_service_config_changed and isinstance(self._service_cfg_cache, dict):
+                self.on_service_config_changed(self._service_cfg_cache)
         except Exception as e:
-            print(f"[ConfigPanel._save_viewer_settings] error writing config: {e}")
+            self._set_service_status(f"Service unreachable: {e}", ok=False)
+
+    def _build_polling_patch(self) -> Dict[str, Any]:
+        patch: Dict[str, Any] = {}
+        pairs = [
+            ("telemetry_hz", self.polling_telemetry_hz.get()),
+            ("config_hz", self.polling_config_hz.get()),
+            ("rampsoak_hz", self.polling_rampsoak_hz.get()),
+            ("analysis_hz", self.polling_analysis_hz.get()),
+            ("gui_refresh_hz", self.polling_gui_refresh_hz.get()),
+            ("equilibrium_window_s", self.polling_eq_window.get()),
+            ("equilibrium_threshold_c", self.polling_eq_threshold.get()),
+        ]
+        for key, value in pairs:
+            num = self._safe_float(value)
+            if num is not None:
+                patch[key] = num
+        patch["flush_each_line"] = bool(self.flush_each_line_var.get())
+        return patch
+
+    def _build_zones_patch(self) -> Dict[str, Any]:
+        mode = self.zones_mode_var.get().strip().lower()
+        if mode == "list":
+            zones = []
+            for token in self.zones_list_entry.get().split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                if token.isdigit():
+                    zones.append(int(token))
+            zones = [z for z in zones if 1 <= z <= 6]
+            if zones:
+                return {"zones_mode": "list", "zones_list": zones}
+            return {"zones_mode": "auto"}
+        return {"zones_mode": "auto"}
+
+    def _build_viewer_patch(self) -> Dict[str, Any]:
+        history_seconds = self._safe_float(self.viewer_history_hours.get())
+        if history_seconds is None or history_seconds <= 0:
+            history_seconds = 3600.0
+
+        viewer = {
+            "history_hours": history_seconds / 3600.0,
+            "line_width": self._safe_float(self.viewer_line_width.get()) or 2.5,
+            "pv_color": self.viewer_pv_color.get().strip() or "blue",
+            "sp_color": self.viewer_sp_color.get().strip() or "red",
+            "sp_autotune_color": self.viewer_sp_autotune_color.get().strip() or "purple",
+        }
+        return {
+            "viewer": viewer,
+            "viewer_history_hours": viewer["history_hours"],
+            "viewer_line_width": viewer["line_width"],
+            "viewer_pv_color": viewer["pv_color"],
+            "viewer_sp_color": viewer["sp_color"],
+            "viewer_sp_autotune_color": viewer["sp_autotune_color"],
+        }
+
+    def _build_connection_patch(self) -> Dict[str, Any]:
+        params = {}
+        baud = self._safe_int(self.conn_baudrate.get())
+        if baud is not None:
+            params["baudrate"] = baud
+        parity = self.conn_parity.get().strip()
+        if parity:
+            params["parity"] = parity
+        stopbits = self._safe_int(self.conn_stopbits.get())
+        if stopbits is not None:
+            params["stopbits"] = stopbits
+        bytesize = self._safe_int(self.conn_bytesize.get())
+        if bytesize is not None:
+            params["bytesize"] = bytesize
+        timeout_s = self._safe_float(self.conn_timeout.get())
+        if timeout_s is not None:
+            params["timeout"] = timeout_s
+
+        patch = {
+            "last_serial_port": self.conn_serial_port.get().strip(),
+            "last_serial_params": params,
+            "last_tcp_host": self.conn_tcp_host.get().strip() or "127.0.0.1",
+            "last_tcp_port": self._safe_int(self.conn_tcp_port.get()) or 8765,
+        }
+        return patch
+
+    def _on_apply_settings_clicked(self):
+        combined_patch = {}
+        combined_patch.update(self._build_polling_patch())
+        combined_patch.update(self._build_zones_patch())
+        combined_patch.update(self._build_viewer_patch())
+        if not combined_patch:
+            self._set_service_status("No settings to apply", ok=False)
+            return
+        self._apply_service_patch(combined_patch, notify_viewer=True)
+
+    def _on_connect_clicked(self):
+        connection_patch = self._build_connection_patch()
+        self._apply_service_patch(connection_patch)
+        try:
+            resp = self._send_service_cmd("connect_serial")
+            if resp.get("ok"):
+                self._set_service_status("Connected", ok=True)
+            else:
+                self._set_service_status(f"Connect failed: {resp.get('error', 'unknown error')}", ok=False)
+        except Exception as e:
+            self._set_service_status(f"Connect failed: {e}", ok=False)
+
+    def _on_disconnect_clicked(self):
+        try:
+            resp = self._send_service_cmd("disconnect_serial")
+            if resp.get("ok"):
+                self._set_service_status("Disconnected", ok=True)
+            else:
+                self._set_service_status(f"Disconnect failed: {resp.get('error', 'unknown error')}", ok=False)
+        except Exception as e:
+            self._set_service_status(f"Disconnect failed: {e}", ok=False)
+
+    def _on_refresh_connection_clicked(self):
+        connection_patch = self._build_connection_patch()
+        self._apply_service_patch(connection_patch)
+        try:
+            resp = self._send_service_cmd("refresh_connection")
+            if resp.get("ok"):
+                self._set_service_status("Connection refreshed", ok=True)
+            else:
+                self._set_service_status(f"Refresh failed: {resp.get('error', 'unknown error')}", ok=False)
+        except Exception as e:
+            self._set_service_status(f"Refresh failed: {e}", ok=False)
 
     def _format_system_config(self, system: Dict) -> str:
         """Format system config for display."""
@@ -515,44 +833,8 @@ class ConfigPanel(StatePanel):
         return "\n".join(lines)
 
     def _format_service_config(self, cfg: Dict) -> str:
-        # reuse same formatting logic that was previously in ServicePanel
-        lines = []
-        lines.append("Connection:")
-        serial_port = cfg.get("last_serial_port", "")
-        params = cfg.get("last_serial_params", {})
-        lines.append(f"  Serial port: {serial_port} {params}")
-        tcp_host = cfg.get("last_tcp_host", "")
-        tcp_port = cfg.get("last_tcp_port", "")
-        lines.append(f"  TCP: {tcp_host}:{tcp_port}")
-        
-        # polling and zones
-        lines.append("")
-        lines.append("Polling:")
-        lines.append(f"  telemetry_hz: {cfg.get('telemetry_hz')}")
-        lines.append(f"  config_hz: {cfg.get('config_hz')}")
-        lines.append(f"  rampsoak_hz: {cfg.get('rampsoak_hz')}")
-        lines.append(f"  analysis_hz: {cfg.get('analysis_hz')}")
-        lines.append(f"  equilibrium_window_s: {cfg.get('equilibrium_window_s')}")
-        lines.append(f"  equilibrium_threshold_c: {cfg.get('equilibrium_threshold_c')}")
-        
-        lines.append("")
-        lines.append("Zones:")
-        lines.append(f"  mode: {cfg.get('zones_mode')}")
-        lines.append(f"  list: {cfg.get('zones_list')}")
-        
-        lines.append("")
-        lines.append(f"  flush_each_line: {cfg.get('flush_each_line')}")
-        
-        # viewer preferences (display only)
-        viewer = self._extract_viewer_from_cfg(cfg)
-        lines.append("")
-        lines.append("Viewer settings:")
-        lines.append(f"  history_hours: {viewer.get('history_hours')}")
-        lines.append(f"  line_width: {viewer.get('line_width')}")
-        lines.append(f"  pv_color: {viewer.get('pv_color')}")
-        lines.append(f"  sp_color: {viewer.get('sp_color')}")
-        lines.append(f"  sp_autotune_color: {viewer.get('sp_autotune_color')}")
-        return "\n".join(lines)
+        # retained for compatibility if needed elsewhere
+        return json.dumps(cfg, indent=2)
     
     def _update_zones_config(self, zones: Dict):
         """Update zone configuration tabs."""

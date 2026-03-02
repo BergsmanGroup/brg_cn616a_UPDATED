@@ -60,7 +60,7 @@ from queue import Queue, Empty
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 from collections import deque
 
-from cn616a import CN616A, CN616AError
+from cn616a import CN616A, CN616AError, SerialParams
 
 
 # -----------------------------
@@ -199,6 +199,7 @@ class ServiceConfig:
     config_hz: float = 0.2
     rampsoak_hz: float = 0.0  # usually on-demand only; keep 0 unless you want periodic snapshots
     analysis_hz: float = 1.0
+    gui_refresh_hz: float = 2.0
     equilibrium_window_s: float = 30.0
     equilibrium_threshold_c: float = 0.25
 
@@ -242,6 +243,7 @@ class ServiceConfig:
             "zones_list": list(self.zones_list),
             "flush_each_line": self.flush_each_line,
             "analysis_hz": self.analysis_hz,
+            "gui_refresh_hz": self.gui_refresh_hz,
             "equilibrium_window_s": self.equilibrium_window_s,
             "equilibrium_threshold_c": self.equilibrium_threshold_c,
             "last_serial_port": self.last_serial_port,
@@ -259,7 +261,7 @@ class ServiceConfig:
     @staticmethod
     def from_dict(d: dict) -> "ServiceConfig":
         cfg = ServiceConfig()
-        for k in ["telemetry_hz","config_hz","rampsoak_hz","analysis_hz",
+        for k in ["telemetry_hz","config_hz","rampsoak_hz","analysis_hz","gui_refresh_hz",
           "equilibrium_window_s","equilibrium_threshold_c",
           "zones_mode","zones_list","flush_each_line",
           "last_serial_port","last_serial_params","last_tcp_host","last_tcp_port",
@@ -275,6 +277,7 @@ class ServiceConfig:
         cfg.zones_list = list(cfg.zones_list) if isinstance(cfg.zones_list, (list, tuple)) else [1, 2, 3, 4, 5, 6]
         cfg.flush_each_line = bool(cfg.flush_each_line)
         cfg.analysis_hz = float(cfg.analysis_hz)
+        cfg.gui_refresh_hz = float(cfg.gui_refresh_hz)
         cfg.equilibrium_window_s = float(cfg.equilibrium_window_s)
         cfg.equilibrium_threshold_c = float(cfg.equilibrium_threshold_c)
         # ensure serial_params keys
@@ -371,7 +374,28 @@ class CN616AService:
         atomic_write_json(self.svc_cfg_state_path, snap)
         append_jsonl(self.svc_cfg_log_path, snap, flush_each_line=self.cfg.flush_each_line)
 
+    def _apply_connection_settings_to_ctl(self) -> None:
+        """Apply configured serial connection settings to driver before connect/reconnect."""
+        configured_port = str(self.cfg.last_serial_port or self.port)
+        self.port = configured_port
+
+        params_raw = self.cfg.last_serial_params if isinstance(self.cfg.last_serial_params, dict) else {}
+        try:
+            serial_params = SerialParams(
+                baudrate=int(params_raw.get("baudrate", 115200)),
+                parity=str(params_raw.get("parity", "N")),
+                stopbits=int(params_raw.get("stopbits", 1)),
+                bytesize=int(params_raw.get("bytesize", 8)),
+                timeout=float(params_raw.get("timeout", 1.0)),
+            )
+        except Exception:
+            serial_params = SerialParams()
+
+        self.ctl.port = configured_port
+        self.ctl.serial = serial_params
+
     def connect(self) -> None:
+        self._apply_connection_settings_to_ctl()
         #if self.verbose:
         if True: #always print this info
             print(f"[service] connecting to CN616A on {self.port} (unit={self.unit})...")
@@ -410,6 +434,7 @@ class CN616AService:
         self.close()
         time.sleep(0.2)
         self.ctl = CN616A(port=self.port, unit=self.unit, register_map_path=self.map_path)
+        self._apply_connection_settings_to_ctl()
         self.connect()
 
     def reload_register_map(self) -> None:
@@ -419,6 +444,7 @@ class CN616AService:
             self.close()
             time.sleep(0.2)
         self.ctl = CN616A(port=self.port, unit=self.unit, register_map_path=self.map_path)
+        self._apply_connection_settings_to_ctl()
         if was_connected:
             self.connect()
 
@@ -708,6 +734,21 @@ class CN616AService:
                 self.zones_enabled = self.cfg.effective_zones()
                 self._log_service_config(event="set_service_config", patch=patch)
                 return {"id": cid, "ok": True, "service_config": self.cfg.to_dict(), "zones_enabled": self.zones_enabled}
+
+            if op == "connect_serial":
+                if not self._connected:
+                    self.connect()
+                return {"id": cid, "ok": True, "connected": self._connected}
+
+            if op == "disconnect_serial":
+                if self._connected:
+                    self.close()
+                self._log_service_config(event="disconnect", patch={})
+                return {"id": cid, "ok": True, "connected": self._connected}
+
+            if op == "refresh_connection":
+                self.restart_serial()
+                return {"id": cid, "ok": True, "connected": self._connected}
 
             if op == "get_status":
                 return {

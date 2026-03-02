@@ -23,9 +23,11 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(py_root))
     from gui.display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
     from gui.chart_panel import ChartPanel
+    from gui.state_reader import get_service_config_state
 else:
     from .display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
     from .chart_panel import ChartPanel
+    from .state_reader import get_service_config_state
 
 
 class CN616AGUI:
@@ -45,6 +47,7 @@ class CN616AGUI:
         
         self.panels = []
         self._create_ui()
+        self._apply_initial_service_refresh_rate()
         self._start_refresh()
     
     def _create_ui(self):
@@ -68,7 +71,8 @@ class CN616AGUI:
         
         # Config tab
         config_panel = ConfigPanel(notebook, self.logs_dir, debug=self.debug,
-                                    on_viewer_config_changed=self._on_viewer_config_changed)
+                                    on_viewer_config_changed=self._on_viewer_config_changed,
+                                    on_service_config_changed=self._on_service_config_changed)
         notebook.add(config_panel, text="Configuration")
         self.panels.append(config_panel)
         
@@ -79,7 +83,7 @@ class CN616AGUI:
         
         # Chart tab: placeholder frame (lazy-loaded on first click)
         self.chart_panel_frame = ttk.Frame(notebook)
-        notebook.add(self.chart_panel_frame, text="Chart (1hr)")
+        notebook.add(self.chart_panel_frame, text="Chart")
         
         # Bind notebook tab change to lazy-load chart
         notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
@@ -90,8 +94,22 @@ class CN616AGUI:
         
         ttk.Label(footer_frame, text=f"Logs dir: {self.logs_dir}", 
                  foreground="gray", font=("Arial", 8)).pack(side=tk.LEFT)
-        ttk.Label(footer_frame, text=f"Refresh: {self.refresh_interval}s", 
-                 foreground="gray", font=("Arial", 8)).pack(side=tk.RIGHT)
+        self.refresh_label = ttk.Label(footer_frame, text=f"Refresh: {self.refresh_interval:.3f}s", 
+                           foreground="gray", font=("Arial", 8))
+        self.refresh_label.pack(side=tk.RIGHT)
+
+    def _apply_initial_service_refresh_rate(self):
+        """Load gui_refresh_hz from service config at startup and apply if valid."""
+        try:
+            svc_state = get_service_config_state(self.logs_dir)
+            cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
+            gui_refresh_hz = float(cfg.get("gui_refresh_hz", 0) or 0)
+            if gui_refresh_hz > 0:
+                self.refresh_interval = 1.0 / gui_refresh_hz
+                if hasattr(self, "refresh_label"):
+                    self.refresh_label.config(text=f"Refresh: {self.refresh_interval:.3f}s")
+        except Exception:
+            pass
     
     def _start_refresh(self):
         """Start auto-refresh on all panels."""
@@ -110,7 +128,7 @@ class CN616AGUI:
         selected_tab = event.widget.select()
         tab_text = event.widget.tab(selected_tab, "text")
         
-        if tab_text == "Chart (1hr)":
+        if tab_text == "Chart":
             self._initialize_chart_panel()
             self.chart_panel_initialized = True
     
@@ -129,6 +147,31 @@ class CN616AGUI:
         """Callback when viewer config is saved. Update chart if it's loaded."""
         if self.chart_panel is not None:
             self.chart_panel.apply_viewer_config(cfg)
+
+    def _on_service_config_changed(self, cfg):
+        """Apply GUI refresh rate changes from service config to running panels."""
+        try:
+            gui_refresh_hz = float(cfg.get("gui_refresh_hz", 0) or 0)
+        except Exception:
+            return
+        if gui_refresh_hz <= 0:
+            return
+
+        new_interval_s = 1.0 / gui_refresh_hz
+        self.refresh_interval = new_interval_s
+
+        # Apply immediately by updating intervals and restarting active refresh loops.
+        for panel in self.panels:
+            if hasattr(panel, "auto_refresh_interval"):
+                panel.auto_refresh_interval = new_interval_s
+            if hasattr(panel, "refresh_interval"):
+                panel.refresh_interval = new_interval_s
+            if hasattr(panel, "stop_auto_refresh") and hasattr(panel, "start_auto_refresh"):
+                panel.stop_auto_refresh()
+                panel.start_auto_refresh()
+
+        if hasattr(self, "refresh_label"):
+            self.refresh_label.config(text=f"Refresh: {new_interval_s:.3f}s")
     
     def _on_closing(self):
         """Clean up when window closes."""

@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, timedelta
 import json
-import threading
-import time
 import traceback
 from zoneinfo import ZoneInfo
 
@@ -24,6 +22,106 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+
+
+_TELEMETRY_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
+
+
+def _iter_lines_reverse(file_path: Path, chunk_size: int = 65536):
+    """Yield non-empty file lines in reverse order without loading full file into memory."""
+    with open(file_path, "rb") as f:
+        f.seek(0, 2)
+        position = f.tell()
+        buffer = b""
+
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            f.seek(position)
+            chunk = f.read(read_size)
+            buffer = chunk + buffer
+            parts = buffer.split(b"\n")
+            buffer = parts[0]
+            for part in reversed(parts[1:]):
+                line = part.decode("utf-8", errors="replace").strip()
+                if line:
+                    yield line
+
+        final_line = buffer.decode("utf-8", errors="replace").strip()
+        if final_line:
+            yield final_line
+
+
+def _extract_zone_values(obj: Dict[str, Any], ts: datetime, zones_data: Dict[int, Dict[str, List[Any]]]) -> int:
+    """Extract zone PV/SP values for one telemetry object. Returns points added count."""
+    points_added = 0
+    zones = obj.get("data", {}).get("zones", {})
+    if not zones:
+        zones = obj.get("telemetry", {}).get("zones", {})
+
+    for zone_id_str in ["1", "2", "3", "4", "5", "6"]:
+        zone_id = int(zone_id_str)
+        zone_data = zones.get(zone_id_str, {})
+
+        pv = zone_data.get("pv_c")
+        sp = zone_data.get("sp_abs_c") or zone_data.get("sp_abs")
+        sp_autotune = zone_data.get("autotune_sp_c") or zone_data.get("autotune_sp")
+
+        if pv is not None or sp is not None or sp_autotune is not None:
+            zones_data[zone_id]["times"].append(ts)
+            zones_data[zone_id]["pv"].append(pv)
+            zones_data[zone_id]["sp"].append(sp)
+            zones_data[zone_id]["sp_autotune"].append(sp_autotune)
+            points_added += 1
+
+    return points_added
+
+
+def _get_latest_timestamp(log_files: List[Path], debug: bool = False) -> Optional[datetime]:
+    """Find latest telemetry timestamp by reverse-scanning newest files first."""
+    for log_file in reversed(log_files):
+        try:
+            for line in _iter_lines_reverse(log_file):
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                ts_str = obj.get("timestamp_pacific") or obj.get("ts")
+                ts = parse_iso_timestamp(ts_str) if ts_str else None
+                if ts is not None:
+                    return ts
+        except Exception:
+            if debug:
+                print(f"[_get_latest_timestamp] failed reading {log_file.name}: {traceback.format_exc()}")
+            continue
+
+    return None
+
+
+def _clone_zones_data(zones_data: Dict[int, Dict[str, List[Any]]]) -> Dict[int, Dict[str, List[Any]]]:
+    """Return a deep-ish clone of zones_data where all value lists are copied."""
+    return {
+        zone_id: {
+            "times": list(values["times"]),
+            "pv": list(values["pv"]),
+            "sp": list(values["sp"]),
+            "sp_autotune": list(values["sp_autotune"]),
+        }
+        for zone_id, values in zones_data.items()
+    }
+
+
+def _build_log_signature(log_files: List[Path]) -> Tuple[Tuple[str, int, int], ...]:
+    """Build a lightweight signature from file name, mtime_ns, and size."""
+    sig: List[Tuple[str, int, int]] = []
+    for log_file in log_files:
+        try:
+            st = log_file.stat()
+            sig.append((log_file.name, st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append((log_file.name, -1, -1))
+    return tuple(sig)
 
 
 def get_display_timezone():
@@ -53,25 +151,25 @@ def find_log_files(logs_dir: Path) -> List[Path]:
     pattern_main = "cn616a_telemetry_log.jsonl"
     pattern_rotated = "cn616a_telemetry_log_*.jsonl"
     
-    files = []
-    
-    # Find main log
+    files: List[Path] = []
+
     main_log = logs_dir / pattern_main
     if main_log.exists():
         files.append(main_log)
-    
-    # Find rotated logs
-    rotated = sorted(logs_dir.glob(pattern_rotated))
-    files.extend(rotated)
-    
-    # Remove duplicates (keep in order: oldest rotated, then main)
-    seen = set()
-    unique_files = []
-    for f in files:
-        if f.name not in seen:
-            unique_files.append(f)
-            seen.add(f.name)
-    
+
+    files.extend(logs_dir.glob(pattern_rotated))
+
+    unique_by_name: Dict[str, Path] = {f.name: f for f in files}
+    unique_files = list(unique_by_name.values())
+
+    def sort_key(file_path: Path):
+        try:
+            st = file_path.stat()
+            return (st.st_mtime_ns, file_path.name)
+        except OSError:
+            return (0, file_path.name)
+
+    unique_files.sort(key=sort_key)
     return unique_files
 
 
@@ -84,24 +182,49 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
     if debug:
         print(f"[load_telemetry_points] loading with history window={time_window_hours}h")
     
-    # Initialize zones 1-6
-    zones_data = {z: {"times": [], "pv": [], "sp": [], "sp_autotune": []} for z in range(1, 7)}
-    
     log_files = find_log_files(logs_dir)
     if debug:
         print(f"[load_telemetry_points] found {len(log_files)} log files: {[f.name for f in log_files]}")
     
     if not log_files:
+        # Initialize zones 1-6
+        zones_data = {z: {"times": [], "pv": [], "sp": [], "sp_autotune": []} for z in range(1, 7)}
         if debug:
             print(f"[load_telemetry_points] no log files found in {logs_dir}")
         return zones_data
+
+    cache_key = (str(logs_dir.resolve()), float(time_window_hours))
+    file_signature = _build_log_signature(log_files)
+    cached = _TELEMETRY_CACHE.get(cache_key)
+    if cached and cached.get("signature") == file_signature:
+        if debug:
+            print("[load_telemetry_points] cache hit")
+        return _clone_zones_data(cached["zones_data"])
+
+    # Initialize zones 1-6
+    zones_data = {z: {"times": [], "pv": [], "sp": [], "sp_autotune": []} for z in range(1, 7)}
     
-    # Read logs in order (oldest first, so new data overwrites if duplicate)
+    # Read only the required history window by scanning newest records backward.
     total_lines_read = 0
     total_points = 0
-    latest_ts: Optional[datetime] = None
-    
-    for log_file in log_files:
+
+    latest_ts = _get_latest_timestamp(log_files, debug=debug)
+    if latest_ts is None:
+        _TELEMETRY_CACHE[cache_key] = {
+            "signature": file_signature,
+            "zones_data": _clone_zones_data(zones_data),
+        }
+        return zones_data
+
+    window_start = latest_ts - timedelta(hours=time_window_hours)
+    if debug:
+        print(f"[load_telemetry_points] latest_ts={latest_ts}, window_start={window_start}")
+
+    # Newest file first, then walk backward until data is older than cutoff.
+    stop_all = False
+    for log_file in reversed(log_files):
+        if stop_all:
+            break
         try:
             if debug:
                 print(f"[load_telemetry_points] reading {log_file.name}...")
@@ -109,92 +232,55 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
             line_count = 0
             skipped_old = 0
             points_added = 0
-            
-            with open(log_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    line_count += 1
-                    
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError as e:
-                        if debug:
-                            print(f"[load_telemetry_points] JSON parse error on {log_file.name} line {line_count}: {e}")
-                        continue
-                    
-                    # Handle both old and new log formats
-                    ts_str = obj.get("timestamp_pacific") or obj.get("ts")
-                    if not ts_str:
-                        if debug and line_count % 100 == 0:  # Log every 100th to avoid spam
-                            print(f"[load_telemetry_points] no timestamp on line {line_count}")
-                        continue
-                    
-                    ts = parse_iso_timestamp(ts_str)
-                    if not ts:
-                        if debug:
-                            print(f"[load_telemetry_points] failed to parse timestamp: {ts_str}")
-                        continue
 
-                    if latest_ts is None or ts > latest_ts:
-                        latest_ts = ts
-                    
-                    # Extract zone data (handle both old and new formats)
-                    zones = obj.get("data", {}).get("zones", {})
-                    if not zones:
-                        zones = obj.get("telemetry", {}).get("zones", {})
-                    
-                    for zone_id_str in ["1", "2", "3", "4", "5", "6"]:
-                        zone_id = int(zone_id_str)
-                        zone_data = zones.get(zone_id_str, {})
-                        
-                        pv = zone_data.get("pv_c")
-                        # Try both old (sp_abs_c) and new (sp_abs) field names
-                        sp = zone_data.get("sp_abs_c") or zone_data.get("sp_abs")
-                        # Autotune setpoint (also try both formats)
-                        sp_autotune = zone_data.get("autotune_sp_c") or zone_data.get("autotune_sp")
-                        
-                        # Only record if at least one value is not None
-                        if pv is not None or sp is not None or sp_autotune is not None:
-                            zones_data[zone_id]["times"].append(ts)
-                            zones_data[zone_id]["pv"].append(pv)
-                            zones_data[zone_id]["sp"].append(sp)
-                            zones_data[zone_id]["sp_autotune"].append(sp_autotune)
-                            points_added += 1
-            
+            file_had_in_window_data = False
+            for line in _iter_lines_reverse(log_file):
+                line_count += 1
+
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as e:
+                    if debug:
+                        print(f"[load_telemetry_points] JSON parse error on {log_file.name} reverse line {line_count}: {e}")
+                    continue
+
+                ts_str = obj.get("timestamp_pacific") or obj.get("ts")
+                if not ts_str:
+                    continue
+
+                ts = parse_iso_timestamp(ts_str)
+                if not ts:
+                    if debug:
+                        print(f"[load_telemetry_points] failed to parse timestamp: {ts_str}")
+                    continue
+
+                if ts < window_start:
+                    skipped_old += 1
+                    if not file_had_in_window_data:
+                        stop_all = True
+                    break
+
+                file_had_in_window_data = True
+                points_added += _extract_zone_values(obj, ts, zones_data)
+
             total_lines_read += line_count
             total_points += points_added
-            
+
             if debug:
-                print(f"[load_telemetry_points]   -> {line_count} lines, {skipped_old} skipped (too old), {points_added} points added")
-        
+                print(f"[load_telemetry_points]   -> {line_count} reverse lines, {skipped_old} skipped (too old), {points_added} points added")
+
         except Exception as e:
             print(f"[load_telemetry_points] Error reading {log_file}: {e}")
             if debug:
                 print(f"[load_telemetry_points] {traceback.format_exc()}")
             continue
-    
-    if latest_ts is not None:
-        window_start = latest_ts - timedelta(hours=time_window_hours)
-        for zone_id in range(1, 7):
-            filtered = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
-            for t, p, s, sa in zip(
-                zones_data[zone_id]["times"],
-                zones_data[zone_id]["pv"],
-                zones_data[zone_id]["sp"],
-                zones_data[zone_id]["sp_autotune"],
-            ):
-                if t >= window_start:
-                    filtered["times"].append(t)
-                    filtered["pv"].append(p)
-                    filtered["sp"].append(s)
-                    filtered["sp_autotune"].append(sa)
-            zones_data[zone_id] = filtered
 
-        if debug:
-            print(f"[load_telemetry_points] latest_ts={latest_ts}, window_start={window_start}")
+    # Reverse per-zone lists back to chronological order after reverse scan.
+    for zone_id in range(1, 7):
+        zones_data[zone_id]["times"].reverse()
+        zones_data[zone_id]["pv"].reverse()
+        zones_data[zone_id]["sp"].reverse()
+        zones_data[zone_id]["sp_autotune"].reverse()
 
     if debug:
         print(f"[load_telemetry_points] TOTAL: {total_lines_read} lines read, {total_points} points loaded across all zones")
@@ -202,7 +288,12 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
             n_points = len(zones_data[z]["times"])
             if n_points > 0:
                 print(f"[load_telemetry_points]   Zone {z}: {n_points} points")
-    
+
+    _TELEMETRY_CACHE[cache_key] = {
+        "signature": file_signature,
+        "zones_data": _clone_zones_data(zones_data),
+    }
+
     return zones_data
 
 
@@ -230,33 +321,33 @@ class ZoneChartPanel(tk.Frame):
         # Timestamp after which new points should be accepted (used by clear)
         self.clear_cutoff: Optional[datetime] = None
         
-        # Threading
         self.running = False
-        self.refresh_thread = None
-        self._stop_event = threading.Event()
+        self._last_signature: Optional[Tuple[Any, ...]] = None
         
         # UI
         self.fig: Optional[Figure] = None
         self.canvas: Optional[FigureCanvasTkAgg] = None
         self.status_label: Optional[ttk.Label] = None
+        self.header_label: Optional[ttk.Label] = None
+        self.metrics_label: Optional[ttk.Label] = None
         
         self.create_widgets()
         
-        # Schedule initial load after widget is properly displayed
+        # Initial render
         self.after(100, self._deferred_init)
     
     def _deferred_init(self):
         """Deferred initialization to ensure widget is properly rendered."""
-        self.initial_load()
-        self.start_auto_refresh()
+        self._update_plot()
     
     def create_widgets(self):
         # Header
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(header, text=f"Zone {self.zone_id} ({self.history_hours:g}-hr window)", 
-                 font=("Arial", 12, "bold")).pack(side=tk.LEFT)
+        self.header_label = ttk.Label(header, text="", font=("Arial", 12, "bold"))
+        self.header_label.pack(side=tk.LEFT)
+        self._update_zone_header()
         
         # Clear button (only for this zone)
         clear_btn = ttk.Button(header, text="Clear This Zone", command=self.clear_chart)
@@ -265,6 +356,10 @@ class ZoneChartPanel(tk.Frame):
         # Status label
         self.status_label = ttk.Label(self, text="", font=("Arial", 9))
         self.status_label.pack(fill=tk.X, padx=10)
+
+        # Live metrics summary (centered, one line)
+        self.metrics_label = ttk.Label(self, text="", font=("Arial", 10), anchor="center", justify=tk.CENTER)
+        self.metrics_label.pack(fill=tk.X, padx=10, pady=(0, 4))
         
         # Canvas frame for matplotlib
         self.canvas_frame = ttk.Frame(self)
@@ -302,64 +397,116 @@ class ZoneChartPanel(tk.Frame):
                 print(f"[ZoneChartPanel.initial_load Z{self.zone_id}] {traceback.format_exc()}")
     
     def start_auto_refresh(self):
-        """Start background thread that refreshes chart."""
-        if self.running:
-            return
-        self._stop_event.clear()
+        """Compatibility no-op: parent ChartPanel now drives refresh in main thread."""
         self.running = True
-        self.refresh_thread = threading.Thread(target=self._refresh_loop, daemon=True)
-        self.refresh_thread.start()
-    
-    def _refresh_loop(self):
-        """Background thread loop for refresh."""
-        while self.running and not self._stop_event.is_set():
-            try:
-                self.refresh()
-            except Exception as e:
-                if self.debug:
-                    print(f"[ZoneChartPanel._refresh_loop Z{self.zone_id}] {traceback.format_exc()}")
-            if self._stop_event.wait(self.refresh_interval):
-                break
     
     def stop_auto_refresh(self):
-        """Stop background refresh thread."""
+        """Stop chart updates for this zone."""
         self.running = False
-        self._stop_event.set()
     
     def refresh(self):
-        """Check for new telemetry and update chart."""
+        """Compatibility method retained for API consistency."""
+        return
+
+    def _history_seconds(self) -> int:
+        return max(1, int(round(float(self.history_hours) * 3600.0)))
+
+    def _update_zone_header(self):
+        if self.header_label is not None:
+            self.header_label.config(text=f"Zone {self.zone_id} ({self._history_seconds()}-s window)")
+
+    def set_live_metrics(self, zone_metrics: Dict[str, Any], analysis_metrics: Optional[Dict[str, Any]] = None):
+        """Update one-line live metrics summary above chart."""
+        if self.metrics_label is None:
+            return
+
+        pv = zone_metrics.get("pv_c")
+        sp = zone_metrics.get("sp_abs") if zone_metrics.get("sp_abs") is not None else zone_metrics.get("sp_abs_c")
+        control_method = zone_metrics.get("control_method", "N/A")
+        autotune_enable = str(zone_metrics.get("autotune_enable", "N/A"))
+        autotune_sp = zone_metrics.get("autotune_sp")
+        p_gain = zone_metrics.get("p_gain")
+        i_gain = zone_metrics.get("i_gain")
+        d_gain = zone_metrics.get("d_gain")
+
+        analysis_metrics = analysis_metrics or {}
+        in_equilibrium = analysis_metrics.get("in_equilibrium")
+        avg_error = analysis_metrics.get("avg_abs_error_c")
+
+        pv_txt = f"{float(pv):.2f}°C" if isinstance(pv, (int, float)) else "N/A"
+        sp_txt = f"{float(sp):.2f}°C" if isinstance(sp, (int, float)) else "N/A"
+        if autotune_enable.upper() == "ENABLE":
+            at_state = "On"
+        elif autotune_enable.upper() == "DISABLE":
+            at_state = "Off"
+        else:
+            at_state = autotune_enable
+        at_sp_txt = f"{float(autotune_sp):.2f}°C" if isinstance(autotune_sp, (int, float)) else "N/A"
+        p_txt = f"{float(p_gain):.4f}" if isinstance(p_gain, (int, float)) else "N/A"
+        i_txt = f"{float(i_gain):.4f}" if isinstance(i_gain, (int, float)) else "N/A"
+        d_txt = f"{float(d_gain):.4f}" if isinstance(d_gain, (int, float)) else "N/A"
+
+        if in_equilibrium is True:
+            eq_txt = "Yes"
+        elif in_equilibrium is False:
+            eq_txt = "No"
+        else:
+            eq_txt = "N/A"
+        avg_err_txt = f"{float(avg_error):.3f}°C" if isinstance(avg_error, (int, float)) else "N/A"
+
+        row1 = f"PV: {pv_txt}   SP: {sp_txt}   Equilibrium? (error): {eq_txt} ({avg_err_txt})"
+        row2 = f"Control: {control_method}   AT: {at_state} ({at_sp_txt})   P: {p_txt}   I: {i_txt}   D: {d_txt}"
+        self.metrics_label.config(text=f"{row1}\n{row2}")
+
+    def set_zone_data(self, new_zone_data: Dict[str, List[Any]]):
+        """Set new zone data and redraw only when changed."""
         try:
-            new_zones_data = load_telemetry_points(self.logs_dir, time_window_hours=self.history_hours, debug=False)
-            new_zone_data = new_zones_data[self.zone_id]
-            
+            # Clone so caller-owned cache structures are not mutated by clear filtering.
+            copied_zone_data = {
+                "times": list(new_zone_data.get("times", [])),
+                "pv": list(new_zone_data.get("pv", [])),
+                "sp": list(new_zone_data.get("sp", [])),
+                "sp_autotune": list(new_zone_data.get("sp_autotune", [])),
+            }
+
             if self.clear_cutoff:
                 # apply cutoff filter
                 filtered = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
-                for t,p,s,sa in zip(new_zone_data["times"], new_zone_data["pv"], new_zone_data["sp"], new_zone_data.get("sp_autotune", [])):
+                for t,p,s,sa in zip(copied_zone_data["times"], copied_zone_data["pv"], copied_zone_data["sp"], copied_zone_data.get("sp_autotune", [])):
                     if t > self.clear_cutoff:
                         filtered["times"].append(t)
                         filtered["pv"].append(p)
                         filtered["sp"].append(s)
                         filtered["sp_autotune"].append(sa)
-                new_zone_data = filtered
-            
-            # Check if data changed (after filtering)
-            if len(new_zone_data["times"]) != len(self.zone_data["times"]):
-                self.zone_data = new_zone_data
+                copied_zone_data = filtered
+
+            times = copied_zone_data["times"]
+            signature = (
+                len(times),
+                times[-1] if times else None,
+                copied_zone_data["pv"][-1] if copied_zone_data["pv"] else None,
+                copied_zone_data["sp"][-1] if copied_zone_data["sp"] else None,
+                copied_zone_data["sp_autotune"][-1] if copied_zone_data["sp_autotune"] else None,
+            )
+
+            if signature != self._last_signature:
+                self._last_signature = signature
+                self.zone_data = copied_zone_data
                 self._update_plot()
                 total_points = len(self.zone_data["times"])
                 self.status_label.config(text=f"Updated: {total_points} points")
                 if self.debug and total_points > 0:
-                    print(f"[ZoneChartPanel.refresh Z{self.zone_id}] {total_points} points")
+                    print(f"[ZoneChartPanel.set_zone_data Z{self.zone_id}] {total_points} points")
         
         except Exception as e:
             if self.debug:
-                print(f"[ZoneChartPanel.refresh Z{self.zone_id}] {traceback.format_exc()}")
+                print(f"[ZoneChartPanel.set_zone_data Z{self.zone_id}] {traceback.format_exc()}")
     
     def clear_chart(self):
         """Clear this zone's chart display and set cutoff to now.
         Future loads will ignore older data until new points arrive."""
         self.zone_data = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
+        self._last_signature = None
         self.clear_cutoff = datetime.now().astimezone()
         if self.debug:
             print(f"[ZoneChartPanel.clear_chart Z{self.zone_id}] cutoff set to {self.clear_cutoff}")
@@ -502,6 +649,8 @@ class ChartPanel(tk.Frame):
         
         # Zone panels
         self.zone_panels: List[ZoneChartPanel] = []
+        self._refresh_after_id: Optional[str] = None
+        self.title_label: Optional[ttk.Label] = None
         
         self.create_widgets()
         
@@ -510,16 +659,16 @@ class ChartPanel(tk.Frame):
     
     def _deferred_init(self):
         """Deferred initialization to ensure widgets are properly rendered."""
-        # All zone panels start their own auto-refresh
-        pass
+        self.refresh()
+        self.start_auto_refresh()
     
     def create_widgets(self):
         # Header
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Label(header, text="Live Telemetry - Per Zone Charts (1-hr window)", 
-                 font=("Arial", 14, "bold")).pack(side=tk.LEFT)
+
+        self.title_label = ttk.Label(header, text="", font=("Arial", 14, "bold"))
+        self.title_label.pack(side=tk.LEFT)
         
         # Sub-notebook for zones
         notebook = ttk.Notebook(self)
@@ -538,6 +687,8 @@ class ChartPanel(tk.Frame):
                 "sp_color": svc_cfg.get("viewer_sp_color", "red"),
                 "sp_autotune_color": svc_cfg.get("viewer_sp_autotune_color", "purple"),
             }
+        self._update_title(float(viewer_cfg.get("history_hours", 1.0) or 1.0))
+
         # Create a panel for each zone using the same viewer config
         for zone_id in range(1, 7):
             zone_panel = ZoneChartPanel(
@@ -548,19 +699,64 @@ class ChartPanel(tk.Frame):
             )
             notebook.add(zone_panel, text=f"Zone {zone_id}")
             self.zone_panels.append(zone_panel)
+
+    def _update_title(self, history_hours: float):
+        history_seconds = max(1, int(round(float(history_hours) * 3600.0)))
+        if self.title_label is not None:
+            self.title_label.config(text=f"Live Telemetry - Per Zone Charts ({history_seconds}-s window)")
     
     def start_auto_refresh(self):
-        """Start auto-refresh on all zone panels."""
+        """Start one main-thread refresh loop for all zone panels."""
+        if self._refresh_after_id is not None:
+            return
         for panel in self.zone_panels:
             panel.start_auto_refresh()
+        self._schedule_next_refresh()
+
+    def _schedule_next_refresh(self):
+        interval_ms = max(100, int(self.refresh_interval * 1000))
+        self._refresh_after_id = self.after(interval_ms, self._refresh_tick)
+
+    def _refresh_tick(self):
+        self._refresh_after_id = None
+        self.refresh()
+        if any(panel.running for panel in self.zone_panels):
+            self._schedule_next_refresh()
     
     def refresh(self):
         """Refresh all zone panels."""
-        for panel in self.zone_panels:
-            panel.refresh()
+        try:
+            # Load all zones once; distribute to zone tabs.
+            all_zones_data = load_telemetry_points(
+                self.logs_dir,
+                time_window_hours=max(panel.history_hours for panel in self.zone_panels) if self.zone_panels else 1.0,
+                debug=False,
+            )
+
+            from .state_reader import get_telemetry_state, get_analysis_state
+            telem_state = get_telemetry_state(self.logs_dir)
+            telem_zones = (((telem_state or {}).get("telemetry", {}) or {}).get("zones", {}) or {})
+            analysis_state = get_analysis_state(self.logs_dir)
+            analysis_zones = ((analysis_state or {}).get("analysis", {}) or {})
+
+            for panel in self.zone_panels:
+                zone_data = all_zones_data.get(panel.zone_id, {"times": [], "pv": [], "sp": [], "sp_autotune": []})
+                panel.set_zone_data(zone_data)
+                zone_metrics = telem_zones.get(str(panel.zone_id), {}) if isinstance(telem_zones, dict) else {}
+                zone_analysis = analysis_zones.get(str(panel.zone_id), {}) if isinstance(analysis_zones, dict) else {}
+                panel.set_live_metrics(
+                    zone_metrics if isinstance(zone_metrics, dict) else {},
+                    zone_analysis if isinstance(zone_analysis, dict) else {},
+                )
+        except Exception:
+            if self.debug:
+                print(f"[ChartPanel.refresh] {traceback.format_exc()}")
     
     def stop_auto_refresh(self):
         """Stop auto-refresh on all zone panels."""
+        if self._refresh_after_id is not None:
+            self.after_cancel(self._refresh_after_id)
+            self._refresh_after_id = None
         for panel in self.zone_panels:
             panel.stop_auto_refresh()
     
@@ -573,8 +769,11 @@ class ChartPanel(tk.Frame):
             panel.pv_color = viewer_cfg.get("pv_color", panel.pv_color)
             panel.sp_color = viewer_cfg.get("sp_color", panel.sp_color)
             panel.sp_autotune_color = viewer_cfg.get("sp_autotune_color", panel.sp_autotune_color)
-            # force a refresh so lines redraw
-            panel.refresh()
+            panel._update_zone_header()
+            panel._update_plot()
+
+        if self.zone_panels:
+            self._update_title(max(panel.history_hours for panel in self.zone_panels))
     
     def destroy(self):
         """Clean up all zone panels when container is destroyed."""
