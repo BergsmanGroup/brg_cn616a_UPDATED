@@ -20,8 +20,21 @@ from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+
+
+class ZoneNavigationToolbar(NavigationToolbar2Tk):
+    """Navigation toolbar that notifies panel when Home is pressed."""
+
+    def __init__(self, canvas, window, on_home_callback=None):
+        self._on_home_callback = on_home_callback
+        super().__init__(canvas, window)
+
+    def home(self, *args):
+        super().home(*args)
+        if callable(self._on_home_callback):
+            self._on_home_callback()
 
 
 _TELEMETRY_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
@@ -327,9 +340,20 @@ class ZoneChartPanel(tk.Frame):
         # UI
         self.fig: Optional[Figure] = None
         self.canvas: Optional[FigureCanvasTkAgg] = None
+        self.toolbar: Optional[NavigationToolbar2Tk] = None
         self.status_label: Optional[ttk.Label] = None
         self.header_label: Optional[ttk.Label] = None
         self.metrics_label: Optional[ttk.Label] = None
+        self.ax_pv = None
+        self.ax_sp = None
+
+        # View state (for preserving user zoom/pan view)
+        self._updating_plot = False
+        self._view_locked = False
+        self._home_view: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
+        self._locked_view: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
+        self._interaction_active = False
+        self._pending_zone_data: Optional[Dict[str, List[Any]]] = None
         
         self.create_widgets()
         
@@ -367,8 +391,21 @@ class ZoneChartPanel(tk.Frame):
         
         # Create matplotlib figure (single subplot)
         self.fig = Figure(figsize=(12, 5), dpi=100)
+        self.ax_pv = self.fig.add_subplot(111)
+        self.ax_sp = self.ax_pv.twinx()
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.canvas_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Matplotlib interactive toolbar (zoom/home/save)
+        toolbar_frame = ttk.Frame(self)
+        toolbar_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+        self.toolbar = ZoneNavigationToolbar(self.canvas, toolbar_frame, on_home_callback=self._on_home_pressed)
+        self.toolbar.update()
+
+        # Track user interactions that may change view limits.
+        self.canvas.mpl_connect("button_press_event", self._on_user_press_event)
+        self.canvas.mpl_connect("button_release_event", self._on_user_release_event)
+        self.canvas.mpl_connect("scroll_event", self._on_user_view_event)
     
     def initial_load(self):
         """Load telemetry data from logs for this zone. Applies clear cutoff if one exists."""
@@ -469,6 +506,11 @@ class ZoneChartPanel(tk.Frame):
                 "sp_autotune": list(new_zone_data.get("sp_autotune", [])),
             }
 
+            # Avoid interrupting rectangle zoom/pan while user is actively interacting.
+            if self._interaction_active:
+                self._pending_zone_data = copied_zone_data
+                return
+
             if self.clear_cutoff:
                 # apply cutoff filter
                 filtered = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
@@ -507,21 +549,101 @@ class ZoneChartPanel(tk.Frame):
         Future loads will ignore older data until new points arrive."""
         self.zone_data = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
         self._last_signature = None
+        self._view_locked = False
+        self._locked_view = None
         self.clear_cutoff = datetime.now().astimezone()
         if self.debug:
             print(f"[ZoneChartPanel.clear_chart Z{self.zone_id}] cutoff set to {self.clear_cutoff}")
         self._update_plot()
         self.status_label.config(text="Chart cleared")
+
+    def _capture_current_view(self):
+        if self.ax_pv is None or self.ax_sp is None:
+            return None
+        return (
+            tuple(self.ax_pv.get_xlim()),
+            tuple(self.ax_pv.get_ylim()),
+            tuple(self.ax_sp.get_ylim()),
+        )
+
+    def _apply_view(self, view):
+        if self.ax_pv is None or self.ax_sp is None or view is None:
+            return
+        xlim, y_pv, y_sp = view
+        self.ax_pv.set_xlim(xlim)
+        self.ax_pv.set_ylim(y_pv)
+        self.ax_sp.set_ylim(y_sp)
+
+    def _on_user_view_event(self, _event=None):
+        if self._updating_plot or self.ax_pv is None or self.ax_sp is None:
+            return
+
+        current_view = self._capture_current_view()
+        if current_view is None:
+            return
+
+        # If user returned to home limits, unlock. Otherwise lock on user-selected view.
+        if self._home_view is not None and self._views_close(current_view, self._home_view):
+            self._view_locked = False
+            self._locked_view = None
+        else:
+            self._view_locked = True
+            self._locked_view = current_view
+
+    def _toolbar_mode_active(self) -> bool:
+        if self.toolbar is None:
+            return False
+        mode = str(getattr(self.toolbar, "mode", "") or "").strip().lower()
+        return mode != ""
+
+    def _on_user_press_event(self, event=None):
+        if self._updating_plot:
+            return
+        if event is not None and event.inaxes is None:
+            return
+        if self._toolbar_mode_active():
+            self._interaction_active = True
+
+    def _on_user_release_event(self, event=None):
+        self._interaction_active = False
+        self._on_user_view_event(event)
+
+        # Apply latest deferred data once interaction is complete.
+        if self._pending_zone_data is not None:
+            pending = self._pending_zone_data
+            self._pending_zone_data = None
+            self.set_zone_data(pending)
+
+    def _on_home_pressed(self):
+        """Unlock user view when toolbar Home is pressed."""
+        self._view_locked = False
+        self._locked_view = None
+
+    @staticmethod
+    def _views_close(a, b, tol=1e-9):
+        for pair_a, pair_b in zip(a, b):
+            for va, vb in zip(pair_a, pair_b):
+                if abs(float(va) - float(vb)) > tol:
+                    return False
+        return True
     
     def _update_plot(self):
         """Redraw the matplotlib chart for this zone."""
         try:
             if self.debug:
                 print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] Starting plot update...")
-            
-            self.fig.clear()
-            ax_pv = self.fig.add_subplot(111)
-            ax_sp = ax_pv.twinx()  # Second Y-axis on the right
+
+            previous_locked_view = self._locked_view if self._view_locked else None
+            self._updating_plot = True
+
+            if self.ax_pv is None or self.ax_sp is None:
+                self.ax_pv = self.fig.add_subplot(111)
+                self.ax_sp = self.ax_pv.twinx()
+
+            ax_pv = self.ax_pv
+            ax_sp = self.ax_sp
+            ax_pv.cla()
+            ax_sp.cla()
             
             times = self.zone_data["times"]
             pvs = self.zone_data["pv"]
@@ -615,6 +737,14 @@ class ZoneChartPanel(tk.Frame):
             if all_lines:
                 labels = [l.get_label() for l in all_lines]
                 ax_pv.legend(all_lines, labels, loc="upper left", fontsize=9)
+
+            # Home view is the auto-scaled view for this data.
+            self._home_view = self._capture_current_view()
+
+            # Preserve user-selected rectangle zoom/pan while locked.
+            if previous_locked_view is not None:
+                self._apply_view(previous_locked_view)
+                self._locked_view = previous_locked_view
             
             # Tight layout
             self.fig.tight_layout()
@@ -631,6 +761,8 @@ class ZoneChartPanel(tk.Frame):
             self.status_label.config(text=error_msg)
             if self.debug:
                 print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] {error_msg}\n{traceback.format_exc()}")
+        finally:
+            self._updating_plot = False
     
     def destroy(self):
         """Clean up when panel is destroyed."""
