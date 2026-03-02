@@ -17,8 +17,15 @@ from pathlib import Path
 import argparse
 import sys
 
-from .display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
-from .chart_panel import ChartPanel
+if __package__ in (None, ""):
+    py_root = Path(__file__).resolve().parents[1]
+    if str(py_root) not in sys.path:
+        sys.path.insert(0, str(py_root))
+    from gui.display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
+    from gui.chart_panel import ChartPanel
+else:
+    from .display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
+    from .chart_panel import ChartPanel
 
 
 class CN616AGUI:
