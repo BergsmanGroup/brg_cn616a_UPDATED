@@ -233,6 +233,7 @@ class ZoneChartPanel(tk.Frame):
         # Threading
         self.running = False
         self.refresh_thread = None
+        self._stop_event = threading.Event()
         
         # UI
         self.fig: Optional[Figure] = None
@@ -304,25 +305,26 @@ class ZoneChartPanel(tk.Frame):
         """Start background thread that refreshes chart."""
         if self.running:
             return
+        self._stop_event.clear()
         self.running = True
         self.refresh_thread = threading.Thread(target=self._refresh_loop, daemon=True)
         self.refresh_thread.start()
     
     def _refresh_loop(self):
         """Background thread loop for refresh."""
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 self.refresh()
             except Exception as e:
                 if self.debug:
                     print(f"[ZoneChartPanel._refresh_loop Z{self.zone_id}] {traceback.format_exc()}")
-            time.sleep(self.refresh_interval)
+            if self._stop_event.wait(self.refresh_interval):
+                break
     
     def stop_auto_refresh(self):
         """Stop background refresh thread."""
         self.running = False
-        if self.refresh_thread:
-            self.refresh_thread.join(timeout=1)
+        self._stop_event.set()
     
     def refresh(self):
         """Check for new telemetry and update chart."""

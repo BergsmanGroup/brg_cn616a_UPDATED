@@ -13,6 +13,7 @@ import threading
 import time
 import traceback
 import json
+from datetime import datetime
 
 from .state_reader import (
     get_telemetry_state, get_config_state, get_rampsoak_state, get_analysis_state,
@@ -31,6 +32,7 @@ class StatePanel(tk.Frame):
         self.debug = debug
         self.refresh_thread = None
         self.running = False
+        self._stop_event = threading.Event()
     
     def _debug_log(self, msg: str):
         """Print debug message only if debug mode is enabled."""
@@ -41,6 +43,7 @@ class StatePanel(tk.Frame):
         """Start background thread that refreshes display."""
         if self.running:
             return
+        self._stop_event.clear()
         self.running = True
         self.refresh_thread = threading.Thread(target=self._refresh_loop, daemon=True)
         self.refresh_thread.start()
@@ -48,17 +51,17 @@ class StatePanel(tk.Frame):
     def stop_auto_refresh(self):
         """Stop background refresh thread."""
         self.running = False
-        if self.refresh_thread:
-            self.refresh_thread.join(timeout=1.0)
+        self._stop_event.set()
     
     def _refresh_loop(self):
         """Background thread that periodically refreshes."""
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 self.after(0, self.refresh)
             except Exception:
                 pass
-            time.sleep(self.auto_refresh_interval)
+            if self._stop_event.wait(self.auto_refresh_interval):
+                break
     
     def refresh(self):
         """Override in subclass to update display."""
@@ -313,6 +316,7 @@ class ConfigPanel(StatePanel):
     def __init__(self, parent, logs_dir: Path, debug: bool = False, on_viewer_config_changed=None):
         super().__init__(parent, logs_dir, debug=debug)
         self.on_viewer_config_changed = on_viewer_config_changed
+        self._viewer_dirty_keys = set()
         self.create_widgets()
     
     def create_widgets(self):
@@ -361,6 +365,9 @@ class ConfigPanel(StatePanel):
             ttk.Label(self.viewer_frame, text=lbl+":").grid(row=i, column=0, sticky="e", pady=2)
             ent = ttk.Entry(self.viewer_frame, width=15)
             ent.grid(row=i, column=1, pady=2, sticky="w")
+            ent.bind("<KeyRelease>", lambda _e, k=key: self._viewer_dirty_keys.add(k))
+            ent.bind("<Return>", self._on_viewer_enter)
+            ent.bind("<KP_Enter>", self._on_viewer_enter)
             self._viewer_entries[key] = ent
         save_btn = ttk.Button(self.viewer_frame, text="Save viewer settings", command=self._save_viewer_settings)
         save_btn.grid(row=len(labels), column=0, columnspan=2, pady=5)
@@ -399,7 +406,7 @@ class ConfigPanel(StatePanel):
             else:
                 self.service_label.config(text=self._format_service_config(svc_cfg))
                 # populate viewer settings form if present
-                viewer = svc_cfg.get("viewer", {})
+                viewer = self._extract_viewer_from_cfg(svc_cfg)
                 self._populate_viewer_form(viewer)
         
         except TypeError as e:
@@ -414,11 +421,33 @@ class ConfigPanel(StatePanel):
     def _populate_viewer_form(self, viewer: Dict[str, Any]):
         """Fill the viewer settings entries from a dict."""
         # viewer may contain history_hours, line_width, pv_color, sp_color, sp_autotune_color
+        focused_widget = self.focus_get()
         for key, entry in self._viewer_entries.items():
+            if key in self._viewer_dirty_keys or focused_widget is entry:
+                continue
             val = viewer.get(key)
             if val is not None:
                 entry.delete(0, tk.END)
                 entry.insert(0, str(val))
+
+    def _extract_viewer_from_cfg(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Read viewer settings from nested viewer object or legacy flat keys."""
+        viewer = dict(cfg.get("viewer", {}) or {})
+        if "history_hours" not in viewer and cfg.get("viewer_history_hours") is not None:
+            viewer["history_hours"] = cfg.get("viewer_history_hours")
+        if "line_width" not in viewer and cfg.get("viewer_line_width") is not None:
+            viewer["line_width"] = cfg.get("viewer_line_width")
+        if "pv_color" not in viewer and cfg.get("viewer_pv_color") is not None:
+            viewer["pv_color"] = cfg.get("viewer_pv_color")
+        if "sp_color" not in viewer and cfg.get("viewer_sp_color") is not None:
+            viewer["sp_color"] = cfg.get("viewer_sp_color")
+        if "sp_autotune_color" not in viewer and cfg.get("viewer_sp_autotune_color") is not None:
+            viewer["sp_autotune_color"] = cfg.get("viewer_sp_autotune_color")
+        return viewer
+
+    def _on_viewer_enter(self, _event=None):
+        self._save_viewer_settings()
+        return "break"
         
     def _save_viewer_settings(self):
         """Gather form values, write to service config state file and notify callback."""
@@ -430,7 +459,7 @@ class ConfigPanel(StatePanel):
         except Exception:
             state = {}
         cfg = state.get("config", {})
-        viewer = cfg.get("viewer", {})
+        viewer = self._extract_viewer_from_cfg(cfg)
         # collect from entries
         for key, entry in self._viewer_entries.items():
             text = entry.get().strip()
@@ -447,12 +476,21 @@ class ConfigPanel(StatePanel):
             if val is not None:
                 viewer[key] = val
         cfg["viewer"] = viewer
+        # Keep legacy flat keys in sync for service compatibility
+        cfg["viewer_history_hours"] = viewer.get("history_hours", cfg.get("viewer_history_hours", 1.0))
+        cfg["viewer_line_width"] = viewer.get("line_width", cfg.get("viewer_line_width", 2.5))
+        cfg["viewer_pv_color"] = viewer.get("pv_color", cfg.get("viewer_pv_color", "blue"))
+        cfg["viewer_sp_color"] = viewer.get("sp_color", cfg.get("viewer_sp_color", "red"))
+        cfg["viewer_sp_autotune_color"] = viewer.get("sp_autotune_color", cfg.get("viewer_sp_autotune_color", "purple"))
         state["config"] = cfg
+        state["ts"] = datetime.now().astimezone().isoformat(timespec="milliseconds")
         # write back
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
             self.service_label.config(text=self._format_service_config(cfg))
+            self.service_info_label.config(text=f"Last update: {format_timestamp(state.get('ts'))}")
+            self._viewer_dirty_keys.clear()
             if self.on_viewer_config_changed:
                 self.on_viewer_config_changed(viewer)
         except Exception as e:
@@ -506,15 +544,14 @@ class ConfigPanel(StatePanel):
         lines.append(f"  flush_each_line: {cfg.get('flush_each_line')}")
         
         # viewer preferences (display only)
-        viewer = cfg.get("viewer", {})
-        if viewer:
-            lines.append("")
-            lines.append("Viewer settings:")
-            lines.append(f"  history_hours: {viewer.get('history_hours')}")
-            lines.append(f"  line_width: {viewer.get('line_width')}")
-            lines.append(f"  pv_color: {viewer.get('pv_color')}")
-            lines.append(f"  sp_color: {viewer.get('sp_color')}")
-            lines.append(f"  sp_autotune_color: {viewer.get('sp_autotune_color')}")
+        viewer = self._extract_viewer_from_cfg(cfg)
+        lines.append("")
+        lines.append("Viewer settings:")
+        lines.append(f"  history_hours: {viewer.get('history_hours')}")
+        lines.append(f"  line_width: {viewer.get('line_width')}")
+        lines.append(f"  pv_color: {viewer.get('pv_color')}")
+        lines.append(f"  sp_color: {viewer.get('sp_color')}")
+        lines.append(f"  sp_autotune_color: {viewer.get('sp_autotune_color')}")
         return "\n".join(lines)
     
     def _update_zones_config(self, zones: Dict):
