@@ -4,3 +4,4 @@ logs/cn616a_analysis_state.json
 logs/cn616a_config_state.json
 logs/cn616a_service_config_state.json
 logs/cn616a_telemetry_state.json
+logs/_debug_axis.png

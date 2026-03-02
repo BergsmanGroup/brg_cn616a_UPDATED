@@ -21,8 +21,17 @@ import traceback
 from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+
+
+def get_display_timezone():
+    """Return preferred display timezone; fall back to local timezone if tz database is unavailable."""
+    try:
+        return ZoneInfo("America/Los_Angeles")
+    except Exception:
+        return datetime.now().astimezone().tzinfo
 
 
 def parse_iso_timestamp(ts_str: str) -> Optional[datetime]:
@@ -72,12 +81,8 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
     
     Returns dict: {zone_id: {'times': [dt, ...], 'pv': [float, ...], 'sp': [float, ...], 'sp_autotune': [float, ...]}}
     """
-    # Get current time in a timezone-aware format
-    now = datetime.now().astimezone()
-    cutoff_time = now - timedelta(hours=time_window_hours)
-    
     if debug:
-        print(f"[load_telemetry_points] now={now}, cutoff_time={cutoff_time}")
+        print(f"[load_telemetry_points] loading with history window={time_window_hours}h")
     
     # Initialize zones 1-6
     zones_data = {z: {"times": [], "pv": [], "sp": [], "sp_autotune": []} for z in range(1, 7)}
@@ -94,6 +99,7 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
     # Read logs in order (oldest first, so new data overwrites if duplicate)
     total_lines_read = 0
     total_points = 0
+    latest_ts: Optional[datetime] = None
     
     for log_file in log_files:
         try:
@@ -131,10 +137,9 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
                         if debug:
                             print(f"[load_telemetry_points] failed to parse timestamp: {ts_str}")
                         continue
-                    
-                    if ts < cutoff_time:
-                        skipped_old += 1
-                        continue  # Skip old entries
+
+                    if latest_ts is None or ts > latest_ts:
+                        latest_ts = ts
                     
                     # Extract zone data (handle both old and new formats)
                     zones = obj.get("data", {}).get("zones", {})
@@ -171,6 +176,26 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
                 print(f"[load_telemetry_points] {traceback.format_exc()}")
             continue
     
+    if latest_ts is not None:
+        window_start = latest_ts - timedelta(hours=time_window_hours)
+        for zone_id in range(1, 7):
+            filtered = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
+            for t, p, s, sa in zip(
+                zones_data[zone_id]["times"],
+                zones_data[zone_id]["pv"],
+                zones_data[zone_id]["sp"],
+                zones_data[zone_id]["sp_autotune"],
+            ):
+                if t >= window_start:
+                    filtered["times"].append(t)
+                    filtered["pv"].append(p)
+                    filtered["sp"].append(s)
+                    filtered["sp_autotune"].append(sa)
+            zones_data[zone_id] = filtered
+
+        if debug:
+            print(f"[load_telemetry_points] latest_ts={latest_ts}, window_start={window_start}")
+
     if debug:
         print(f"[load_telemetry_points] TOTAL: {total_lines_read} lines read, {total_points} points loaded across all zones")
         for z in range(1, 7):
@@ -229,7 +254,7 @@ class ZoneChartPanel(tk.Frame):
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(header, text=f"Zone {self.zone_id} (1-hr window)", 
+        ttk.Label(header, text=f"Zone {self.zone_id} ({self.history_hours:g}-hr window)", 
                  font=("Arial", 12, "bold")).pack(side=tk.LEFT)
         
         # Clear button (only for this zone)
@@ -354,9 +379,12 @@ class ZoneChartPanel(tk.Frame):
             sps = self.zone_data["sp"]
             sp_autotunes = self.zone_data["sp_autotune"]
             
-            # Convert all times to Pacific timezone for consistent display
-            pacific = ZoneInfo("America/Los_Angeles")
-            times_pacific = [t.astimezone(pacific) if t.tzinfo != pacific else t for t in times]
+            # Convert all times to display timezone for consistent display
+            display_tz = get_display_timezone()
+            times_display = [
+                t.astimezone(display_tz) if getattr(t, "tzinfo", None) is not None else t
+                for t in times
+            ]
             
             if not times:
                 ax_pv.text(0.5, 0.5, "No data", ha="center", va="center", 
@@ -365,25 +393,19 @@ class ZoneChartPanel(tk.Frame):
                 self.canvas.draw()
                 return
             
-            now = datetime.now().astimezone(pacific)
-            one_hour_ago = now - timedelta(hours=self.history_hours)
-            
-            # determine x-range: use data bounds but cap to 1 hour window
-            if times:
-                min_time = min(times)
-                max_time = max(times)
-                # ensure max_time is not in future
-                if max_time > now:
-                    max_time = now
-                # if span >1h, slide window to last hour
-                if (max_time - min_time) > timedelta(hours=1):
-                    min_time = max_time - timedelta(hours=1)
-            else:
-                min_time = one_hour_ago
-                max_time = now
+            # Determine x-range from data itself and cap to configured history window
+            max_time = max(times_display)
+            min_time = max_time - timedelta(hours=self.history_hours)
+            if times_display:
+                data_min = min(times_display)
+                if data_min > min_time:
+                    min_time = data_min
+
+            if min_time >= max_time:
+                min_time = max_time - timedelta(minutes=1)
             
             # Plot PV on left axis (solid blue line)
-            pv_times = [t for t, p in zip(times, pvs) if p is not None]
+            pv_times = [t for t, p in zip(times_display, pvs) if p is not None]
             pv_vals = [p for p in pvs if p is not None]
             if pv_vals:
                 ax_pv.plot(pv_times, pv_vals,
@@ -394,7 +416,7 @@ class ZoneChartPanel(tk.Frame):
                     print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(pv_vals)} PV points")
             
             # Plot absolute setpoint on right axis
-            sp_times = [t for t, s in zip(times, sps) if s is not None]
+            sp_times = [t for t, s in zip(times_display, sps) if s is not None]
             sp_vals = [s for s in sps if s is not None]
             if sp_vals:
                 ax_sp.plot(sp_times, sp_vals,
@@ -405,7 +427,7 @@ class ZoneChartPanel(tk.Frame):
                     print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(sp_vals)} SP Abs points")
             
             # Plot autotune setpoint on right axis
-            sp_auto_times = [t for t, s in zip(times, sp_autotunes) if s is not None]
+            sp_auto_times = [t for t, s in zip(times_display, sp_autotunes) if s is not None]
             sp_auto_vals = [s for s in sp_autotunes if s is not None]
             if sp_auto_vals:
                 ax_sp.plot(sp_auto_times, sp_auto_vals,
@@ -427,6 +449,8 @@ class ZoneChartPanel(tk.Frame):
             
             # Set X-axis range using computed bounds
             ax_pv.set_xlim(min_time, max_time)
+            ax_pv.xaxis.set_major_locator(mdates.AutoDateLocator())
+            ax_pv.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S", tz=display_tz))
             
             # Rotate x-axis labels
             for label in ax_pv.get_xticklabels():
@@ -502,7 +526,16 @@ class ChartPanel(tk.Frame):
         # pull viewer settings from service config
         from .state_reader import get_service_config_state
         svc = get_service_config_state(self.logs_dir)
-        viewer_cfg = svc.get("config", {}).get("viewer", {})
+        svc_cfg = svc.get("config", {})
+        viewer_cfg = svc_cfg.get("viewer", {})
+        if not viewer_cfg:
+            viewer_cfg = {
+                "history_hours": svc_cfg.get("viewer_history_hours", 1.0),
+                "line_width": svc_cfg.get("viewer_line_width", 2.5),
+                "pv_color": svc_cfg.get("viewer_pv_color", "blue"),
+                "sp_color": svc_cfg.get("viewer_sp_color", "red"),
+                "sp_autotune_color": svc_cfg.get("viewer_sp_autotune_color", "purple"),
+            }
         # Create a panel for each zone using the same viewer config
         for zone_id in range(1, 7):
             zone_panel = ZoneChartPanel(
