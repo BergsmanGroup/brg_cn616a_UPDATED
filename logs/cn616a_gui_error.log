@@ -1,6 +1,72 @@
-2026-03-06 17:26:54,834 INFO [cn616a.gui] GUI runtime logging initialized
-2026-03-06 17:33:09,164 INFO [cn616a.gui] GUI runtime logging initialized
-2026-03-06 17:51:35,782 INFO [cn616a.gui] GUI runtime logging initialized
-2026-03-06 17:51:49,220 INFO [cn616a.gui] GUI runtime logging initialized
-2026-03-06 17:55:17,299 INFO [cn616a.gui] GUI runtime logging initialized
-2026-03-06 17:57:16,951 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 18:06:43,368 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862, in callit
+    func(*args)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\_backend_tk.py", line 302, in idle_draw
+    self.draw()
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_tkagg.py", line 10, in draw
+    super().draw()
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_agg.py", line 382, in draw
+    self.figure.draw(self.renderer)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 94, in draw_wrapper
+    result = draw(artist, renderer, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71, in draw_wrapper
+    return draw(artist, renderer)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\figure.py", line 3257, in draw
+    mimage._draw_list_compositing_images(
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134, in _draw_list_compositing_images
+    a.draw(renderer)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71, in draw_wrapper
+    return draw(artist, renderer)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 3226, in draw
+    mimage._draw_list_compositing_images(
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134, in _draw_list_compositing_images
+    a.draw(renderer)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71, in draw_wrapper
+    return draw(artist, renderer)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1404, in draw
+    ticks_to_draw = self._update_ticks()
+                    ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1283, in _update_ticks
+    major_ticks = self.get_major_ticks(len(major_locs))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1664, in get_major_ticks
+    tick = self._get_tick(major=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1592, in _get_tick
+    return self._tick_class(self.axes, 0, major=major, **tick_kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 429, in __init__
+    super().__init__(*args, **kwargs)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 154, in __init__
+    self.tick1line = mlines.Line2D(
+                     ^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\lines.py", line 390, in __init__
+    self.set_color(color)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\lines.py", line 1083, in set_color
+    self.stale = True
+    ^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 315, in stale
+    @stale.setter
+    
+KeyboardInterrupt
+2026-03-06 18:06:53,037 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 18:07:16,327 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 310, in load_telemetry_points
+    points_added += _extract_zone_values(obj, ts, zones_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 116, in _extract_zone_values
+    zones_data[zone_id]["times"].append(ts)
+    ~~~~~~~~~~^^^^^^^^^
+KeyError: 3
+2026-03-06 18:08:46,934 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 18:17:16,641 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 18:22:46,969 INFO [cn616a.gui] GUI runtime logging initialized

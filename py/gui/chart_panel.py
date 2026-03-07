@@ -12,7 +12,7 @@ Live telemetry chart panel with 1-hour rolling window.
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Callable
 from datetime import datetime, timedelta
 import json
 import traceback
@@ -43,6 +43,7 @@ class ZoneNavigationToolbar(NavigationToolbar2Tk):
 
 
 _TELEMETRY_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
+_ANALYSIS_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
 
 
 def _normalize_zone_names(raw: Any) -> Dict[int, str]:
@@ -189,21 +190,15 @@ def parse_iso_timestamp(ts_str: str) -> Optional[datetime]:
         return None
 
 
-def find_log_files(logs_dir: Path) -> List[Path]:
-    """
-    Find telemetry log files, ordered by date/rotation number.
-    Handles both cn616a_telemetry_log.jsonl and cn616a_telemetry_log_YYYY-MM-DD_###.jsonl
-    """
-    pattern_main = "cn616a_telemetry_log.jsonl"
-    pattern_rotated = "cn616a_telemetry_log_*.jsonl"
-    
+def find_jsonl_log_files(logs_dir: Path, main_name: str, rotated_pattern: str) -> List[Path]:
+    """Find JSONL log files with optional rotation, sorted by mtime."""
     files: List[Path] = []
 
-    main_log = logs_dir / pattern_main
+    main_log = logs_dir / main_name
     if main_log.exists():
         files.append(main_log)
 
-    files.extend(logs_dir.glob(pattern_rotated))
+    files.extend(logs_dir.glob(rotated_pattern))
 
     unique_by_name: Dict[str, Path] = {f.name: f for f in files}
     unique_files = list(unique_by_name.values())
@@ -217,6 +212,170 @@ def find_log_files(logs_dir: Path) -> List[Path]:
 
     unique_files.sort(key=sort_key)
     return unique_files
+
+
+def find_log_files(logs_dir: Path) -> List[Path]:
+    """Find telemetry log files, ordered by mtime."""
+    return find_jsonl_log_files(
+        logs_dir,
+        main_name="cn616a_telemetry_log.jsonl",
+        rotated_pattern="cn616a_telemetry_log_*.jsonl",
+    )
+
+
+def find_analysis_log_files(logs_dir: Path) -> List[Path]:
+    """Find analysis log files, ordered by mtime."""
+    return find_jsonl_log_files(
+        logs_dir,
+        main_name="cn616a_analysis_log.jsonl",
+        rotated_pattern="cn616a_analysis_log_*.jsonl",
+    )
+
+
+def _scan_windowed_log_points(
+    log_files: List[Path],
+    time_window_hours: float,
+    out_data: Dict[int, Dict[str, List[Any]]],
+    extract_fn: Callable[[Dict[str, Any], datetime, Dict[int, Dict[str, List[Any]]]], int],
+    *,
+    debug: bool = False,
+    label: str = "history",
+    error_log_message: Optional[str] = None,
+    print_error_prefix: Optional[str] = None,
+) -> Tuple[int, int]:
+    """Shared reverse-scan loader used for telemetry and analysis history."""
+    latest_ts = _get_latest_timestamp(log_files, debug=debug)
+    if latest_ts is None:
+        return (0, 0)
+
+    window_start = latest_ts - timedelta(hours=time_window_hours)
+    if debug:
+        print(f"[{label}] latest_ts={latest_ts}, window_start={window_start}")
+
+    total_lines_read = 0
+    total_points = 0
+    stop_all = False
+    for log_file in reversed(log_files):
+        if stop_all:
+            break
+        try:
+            file_had_in_window_data = False
+            for line in _iter_lines_reverse(log_file):
+                total_lines_read += 1
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                ts_str = obj.get("timestamp_pacific") or obj.get("ts")
+                ts = parse_iso_timestamp(ts_str) if ts_str else None
+                if ts is None:
+                    continue
+
+                if ts < window_start:
+                    if not file_had_in_window_data:
+                        stop_all = True
+                    break
+
+                file_had_in_window_data = True
+                total_points += extract_fn(obj, ts, out_data)
+        except Exception:
+            if print_error_prefix:
+                try:
+                    print(f"[{print_error_prefix}] Error reading {log_file}")
+                except Exception:
+                    pass
+            if error_log_message:
+                LOGGER.exception(error_log_message, log_file)
+            else:
+                LOGGER.exception("%s failed reading %s", label, log_file)
+            if debug:
+                print(f"[{label}] {traceback.format_exc()}")
+            continue
+
+    return (total_lines_read, total_points)
+
+
+def _clone_analysis_data(analysis_data: Dict[int, Dict[str, List[Any]]]) -> Dict[int, Dict[str, List[Any]]]:
+    return {
+        zone_id: {
+            "times": list(values["times"]),
+            "mae": list(values["mae"]),
+        }
+        for zone_id, values in analysis_data.items()
+    }
+
+
+def _extract_analysis_zone_values(obj: Dict[str, Any], ts: datetime, analysis_data: Dict[int, Dict[str, List[Any]]]) -> int:
+    """Extract per-zone MAE values for one analysis object. Returns points added count."""
+    points_added = 0
+    zones = obj.get("analysis", {})
+    if not isinstance(zones, dict):
+        return 0
+
+    for zone_id in range(1, 7):
+        zone_obj = zones.get(str(zone_id), zones.get(zone_id, {}))
+        if not isinstance(zone_obj, dict):
+            continue
+        mae_val = zone_obj.get("avg_abs_error_c")
+        if isinstance(mae_val, (int, float)):
+            analysis_data[zone_id]["times"].append(ts)
+            analysis_data[zone_id]["mae"].append(float(mae_val))
+            points_added += 1
+
+    return points_added
+
+
+def load_analysis_points(logs_dir: Path, time_window_hours: float = 1.0, debug: bool = False) -> Dict[int, Dict[str, List[Any]]]:
+    """
+    Load MAE analysis points from JSONL logs within the time window.
+
+    Returns dict: {zone_id: {'times': [dt, ...], 'mae': [float, ...]}}
+    """
+    if debug:
+        print(f"[load_analysis_points] loading with history window={time_window_hours}h")
+
+    log_files = find_analysis_log_files(logs_dir)
+    if not log_files:
+        return {z: {"times": [], "mae": []} for z in range(1, 7)}
+
+    cache_key = (str(logs_dir.resolve()), float(time_window_hours))
+    file_signature = _build_log_signature(log_files)
+    cached = _ANALYSIS_CACHE.get(cache_key)
+    if cached and cached.get("signature") == file_signature:
+        if debug:
+            print("[load_analysis_points] cache hit")
+        return _clone_analysis_data(cached["analysis_data"])
+
+    analysis_data = {z: {"times": [], "mae": []} for z in range(1, 7)}
+    lines_read, points_added = _scan_windowed_log_points(
+        log_files,
+        time_window_hours,
+        analysis_data,
+        _extract_analysis_zone_values,
+        debug=debug,
+        label="load_analysis_points",
+        error_log_message="load_analysis_points failed reading %s",
+    )
+    if lines_read == 0 and points_added == 0:
+        _ANALYSIS_CACHE[cache_key] = {
+            "signature": file_signature,
+            "analysis_data": _clone_analysis_data(analysis_data),
+        }
+        return analysis_data
+
+    if debug:
+        print(f"[load_analysis_points] total reverse lines={lines_read}, points added={points_added}")
+
+    for zone_id in range(1, 7):
+        analysis_data[zone_id]["times"].reverse()
+        analysis_data[zone_id]["mae"].reverse()
+
+    _ANALYSIS_CACHE[cache_key] = {
+        "signature": file_signature,
+        "analysis_data": _clone_analysis_data(analysis_data),
+    }
+    return analysis_data
 
 
 def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug: bool = False) -> Dict[int, Dict[str, List[Tuple]]]:
@@ -251,76 +410,22 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
     zones_data = {z: {"times": [], "pv": [], "sp": [], "sp_autotune": []} for z in range(1, 7)}
     
     # Read only the required history window by scanning newest records backward.
-    total_lines_read = 0
-    total_points = 0
-
-    latest_ts = _get_latest_timestamp(log_files, debug=debug)
-    if latest_ts is None:
+    total_lines_read, total_points = _scan_windowed_log_points(
+        log_files,
+        time_window_hours,
+        zones_data,
+        _extract_zone_values,
+        debug=debug,
+        label="load_telemetry_points",
+        error_log_message="load_telemetry_points failed reading %s",
+        print_error_prefix="load_telemetry_points",
+    )
+    if total_lines_read == 0 and total_points == 0:
         _TELEMETRY_CACHE[cache_key] = {
             "signature": file_signature,
             "zones_data": _clone_zones_data(zones_data),
         }
         return zones_data
-
-    window_start = latest_ts - timedelta(hours=time_window_hours)
-    if debug:
-        print(f"[load_telemetry_points] latest_ts={latest_ts}, window_start={window_start}")
-
-    # Newest file first, then walk backward until data is older than cutoff.
-    stop_all = False
-    for log_file in reversed(log_files):
-        if stop_all:
-            break
-        try:
-            if debug:
-                print(f"[load_telemetry_points] reading {log_file.name}...")
-            
-            line_count = 0
-            skipped_old = 0
-            points_added = 0
-
-            file_had_in_window_data = False
-            for line in _iter_lines_reverse(log_file):
-                line_count += 1
-
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError as e:
-                    if debug:
-                        print(f"[load_telemetry_points] JSON parse error on {log_file.name} reverse line {line_count}: {e}")
-                    continue
-
-                ts_str = obj.get("timestamp_pacific") or obj.get("ts")
-                if not ts_str:
-                    continue
-
-                ts = parse_iso_timestamp(ts_str)
-                if not ts:
-                    if debug:
-                        print(f"[load_telemetry_points] failed to parse timestamp: {ts_str}")
-                    continue
-
-                if ts < window_start:
-                    skipped_old += 1
-                    if not file_had_in_window_data:
-                        stop_all = True
-                    break
-
-                file_had_in_window_data = True
-                points_added += _extract_zone_values(obj, ts, zones_data)
-
-            total_lines_read += line_count
-            total_points += points_added
-
-            if debug:
-                print(f"[load_telemetry_points]   -> {line_count} reverse lines, {skipped_old} skipped (too old), {points_added} points added")
-
-        except Exception as e:
-            print(f"[load_telemetry_points] Error reading {log_file}: {e}")
-            LOGGER.exception("load_telemetry_points failed reading %s", log_file)
-            if debug:
-                print(f"[load_telemetry_points] {traceback.format_exc()}")
-            continue
 
     # Reverse per-zone lists back to chronological order after reverse scan.
     for zone_id in range(1, 7):
@@ -386,6 +491,8 @@ class ZoneChartPanel(tk.Frame):
         self.ax_pv = None
         self.ax_sp = None
         self.current_mae: Optional[float] = None
+        self.mae_series: Dict[str, List[Any]] = {"times": [], "values": []}
+        self._mae_ylim: Optional[Tuple[float, float]] = None
 
         # View state (for preserving user zoom/pan view)
         self._updating_plot = False
@@ -498,6 +605,25 @@ class ZoneChartPanel(tk.Frame):
         self.zone_name = name or f"Zone {self.zone_id}"
         self._update_zone_header()
 
+    def set_mae_history(self, mae_history: Dict[str, List[Any]]):
+        """Set MAE time-series history for this zone from analysis logs."""
+        history = {
+            "times": list(mae_history.get("times", [])),
+            "values": list(mae_history.get("mae", [])),
+        }
+
+        if self.clear_cutoff:
+            filtered_times: List[Any] = []
+            filtered_vals: List[Any] = []
+            for t, v in zip(history["times"], history["values"]):
+                if t > self.clear_cutoff:
+                    filtered_times.append(t)
+                    filtered_vals.append(v)
+            history["times"] = filtered_times
+            history["values"] = filtered_vals
+
+        self.mae_series = history
+
     def set_live_metrics(self, zone_metrics: Dict[str, Any], analysis_metrics: Optional[Dict[str, Any]] = None):
         """Update one-line live metrics summary above chart."""
         if self.metrics_label is None:
@@ -518,6 +644,30 @@ class ZoneChartPanel(tk.Frame):
 
         mae_value = float(avg_error) if isinstance(avg_error, (int, float)) else None
         self.current_mae = mae_value
+
+        if mae_value is not None:
+            sample_time = None
+            if self.zone_data["times"]:
+                sample_time = self.zone_data["times"][-1]
+            if sample_time is None:
+                sample_time = datetime.now().astimezone()
+
+            if self.clear_cutoff and sample_time <= self.clear_cutoff:
+                sample_time = datetime.now().astimezone()
+
+            mae_times = self.mae_series["times"]
+            mae_values = self.mae_series["values"]
+            if mae_times and mae_times[-1] == sample_time:
+                mae_values[-1] = mae_value
+            else:
+                mae_times.append(sample_time)
+                mae_values.append(mae_value)
+
+            # Keep MAE history bounded to chart window to avoid unbounded growth.
+            history_cutoff = sample_time - timedelta(hours=self.history_hours)
+            while mae_times and mae_times[0] < history_cutoff:
+                mae_times.pop(0)
+                mae_values.pop(0)
 
         pv_txt = f"{float(pv):.2f}°C" if isinstance(pv, (int, float)) else "N/A"
         sp_txt = f"{float(sp):.2f}°C" if isinstance(sp, (int, float)) else "N/A"
@@ -600,6 +750,8 @@ class ZoneChartPanel(tk.Frame):
         """Clear this zone's chart display and set cutoff to now.
         Future loads will ignore older data until new points arrive."""
         self.zone_data = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
+        self.mae_series = {"times": [], "values": []}
+        self._mae_ylim = None
         self._last_signature = None
         self._view_locked = False
         self._locked_view = None
@@ -802,17 +954,53 @@ class ZoneChartPanel(tk.Frame):
             y_formatter.set_scientific(False)
             ax_pv.yaxis.set_major_formatter(y_formatter)
 
-            # Plot latest MAE on secondary Y-axis as a live reference line.
-            if self.show_mae and self.current_mae is not None:
-                mae_val = float(self.current_mae)
+            # Plot MAE trend on secondary Y-axis and smooth axis updates to reduce jitter.
+            mae_times = [
+                t.astimezone(display_tz) if getattr(t, "tzinfo", None) is not None else t
+                for t in self.mae_series["times"]
+            ]
+            mae_vals = list(self.mae_series["values"])
+            mae_pairs = [
+                (t, v)
+                for t, v in zip(mae_times, mae_vals)
+                if v is not None and t >= min_time and t <= max_time
+            ]
+
+            if self.show_mae and mae_pairs:
+                mae_plot_times = [t for t, _ in mae_pairs]
+                mae_plot_vals = [float(v) for _, v in mae_pairs]
                 ax_sp.plot(
-                    [min_time, max_time],
-                    [mae_val, mae_val],
+                    mae_plot_times,
+                    mae_plot_vals,
                     color="darkgreen",
                     linewidth=max(1.5, float(self.line_width) * 0.8),
-                    linestyle=":",
+                    linestyle="-",
                     label="MAE",
                 )
+
+                mae_min = min(mae_plot_vals)
+                mae_max = max(mae_plot_vals)
+                if mae_max - mae_min < 1e-9:
+                    pad = max(0.05, abs(mae_max) * 0.2)
+                else:
+                    pad = max(0.02, (mae_max - mae_min) * 0.15)
+
+                target_lower = max(0.0, mae_min - pad)
+                target_upper = max(target_lower + 0.05, mae_max + pad)
+                if self._mae_ylim is None:
+                    self._mae_ylim = (target_lower, target_upper)
+                else:
+                    prev_lower, prev_upper = self._mae_ylim
+                    smooth_lower = prev_lower * 0.8 + target_lower * 0.2
+                    smooth_upper = prev_upper * 0.8 + target_upper * 0.2
+                    # Never clip current data while smoothing.
+                    smooth_lower = min(smooth_lower, target_lower)
+                    smooth_upper = max(smooth_upper, target_upper)
+                    if smooth_upper - smooth_lower < 0.05:
+                        smooth_upper = smooth_lower + 0.05
+                    self._mae_ylim = (max(0.0, smooth_lower), smooth_upper)
+
+                ax_sp.set_ylim(*self._mae_ylim)
                 ax_sp.set_ylabel("MAE (°C)", color="darkgreen", fontsize=10, fontweight="bold")
                 ax_sp.yaxis.set_label_position("right")
                 ax_sp.yaxis.tick_right()
@@ -822,6 +1010,7 @@ class ZoneChartPanel(tk.Frame):
                 mae_formatter.set_scientific(False)
                 ax_sp.yaxis.set_major_formatter(mae_formatter)
             else:
+                self._mae_ylim = None
                 ax_sp.set_ylabel("")
                 ax_sp.set_yticks([])
                 ax_sp.tick_params(axis="y", right=True, labelright=False)
@@ -994,6 +1183,11 @@ class ChartPanel(tk.Frame):
                 time_window_hours=max(panel.history_hours for panel in self.zone_panels) if self.zone_panels else 1.0,
                 debug=False,
             )
+            all_analysis_data = load_analysis_points(
+                self.logs_dir,
+                time_window_hours=max(panel.history_hours for panel in self.zone_panels) if self.zone_panels else 1.0,
+                debug=False,
+            )
 
             from .state_reader import get_telemetry_state, get_analysis_state
             telem_state = get_telemetry_state(self.logs_dir)
@@ -1003,7 +1197,9 @@ class ChartPanel(tk.Frame):
 
             for panel in self.zone_panels:
                 zone_data = all_zones_data.get(panel.zone_id, {"times": [], "pv": [], "sp": [], "sp_autotune": []})
+                zone_mae = all_analysis_data.get(panel.zone_id, {"times": [], "mae": []})
                 panel.set_zone_data(zone_data)
+                panel.set_mae_history(zone_mae)
                 zone_metrics = telem_zones.get(str(panel.zone_id), {}) if isinstance(telem_zones, dict) else {}
                 zone_analysis = analysis_zones.get(str(panel.zone_id), {}) if isinstance(analysis_zones, dict) else {}
                 panel.set_live_metrics(

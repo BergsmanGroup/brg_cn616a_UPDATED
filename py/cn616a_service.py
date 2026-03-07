@@ -233,6 +233,9 @@ class ServiceConfig:
     viewer_pv_color: str = "blue"
     viewer_sp_color: str = "red"
     viewer_sp_autotune_color: str = "purple"
+    viewer_show_sp_abs: bool = True
+    viewer_show_sp_autotune: bool = True
+    viewer_show_mae: bool = True
 
     # Last successful connection info
     last_serial_port: str = ""
@@ -274,19 +277,49 @@ class ServiceConfig:
             "viewer_pv_color": self.viewer_pv_color,
             "viewer_sp_color": self.viewer_sp_color,
             "viewer_sp_autotune_color": self.viewer_sp_autotune_color,
+            "viewer_show_sp_abs": self.viewer_show_sp_abs,
+            "viewer_show_sp_autotune": self.viewer_show_sp_autotune,
+            "viewer_show_mae": self.viewer_show_mae,
+            "viewer": {
+                "history_hours": self.viewer_history_hours,
+                "line_width": self.viewer_line_width,
+                "pv_color": self.viewer_pv_color,
+                "sp_color": self.viewer_sp_color,
+                "sp_autotune_color": self.viewer_sp_autotune_color,
+                "show_sp_abs": self.viewer_show_sp_abs,
+                "show_sp_autotune": self.viewer_show_sp_autotune,
+                "show_mae": self.viewer_show_mae,
+            },
         }
 
     @staticmethod
     def from_dict(d: dict) -> "ServiceConfig":
+        if not isinstance(d, dict):
+            d = {}
+
+        # Accept nested viewer payload and map to flat persisted keys.
+        source = dict(d)
+        viewer = source.get("viewer")
+        if isinstance(viewer, dict):
+            source.setdefault("viewer_history_hours", viewer.get("history_hours"))
+            source.setdefault("viewer_line_width", viewer.get("line_width"))
+            source.setdefault("viewer_pv_color", viewer.get("pv_color"))
+            source.setdefault("viewer_sp_color", viewer.get("sp_color"))
+            source.setdefault("viewer_sp_autotune_color", viewer.get("sp_autotune_color"))
+            source.setdefault("viewer_show_sp_abs", viewer.get("show_sp_abs"))
+            source.setdefault("viewer_show_sp_autotune", viewer.get("show_sp_autotune"))
+            source.setdefault("viewer_show_mae", viewer.get("show_mae"))
+
         cfg = ServiceConfig()
         for k in ["telemetry_hz", "config_hz", "rampsoak_hz", "analysis_hz", "gui_refresh_hz",
                   "equilibrium_window_s", "equilibrium_threshold_c",
                   "zones_mode", "zones_list", "zone_names", "flush_each_line",
                   "last_serial_port", "last_serial_params", "last_tcp_host", "last_tcp_port",
                   "viewer_history_hours", "viewer_line_width",
-                  "viewer_pv_color", "viewer_sp_color", "viewer_sp_autotune_color"]:
-            if k in d:
-                setattr(cfg, k, d[k])
+                  "viewer_pv_color", "viewer_sp_color", "viewer_sp_autotune_color",
+                  "viewer_show_sp_abs", "viewer_show_sp_autotune", "viewer_show_mae"]:
+            if k in source:
+                setattr(cfg, k, source[k])
         # normalize
         cfg.telemetry_hz = float(cfg.telemetry_hz)
         cfg.config_hz = float(cfg.config_hz)
@@ -313,6 +346,9 @@ class ServiceConfig:
         cfg.gui_refresh_hz = float(cfg.gui_refresh_hz)
         cfg.equilibrium_window_s = float(cfg.equilibrium_window_s)
         cfg.equilibrium_threshold_c = float(cfg.equilibrium_threshold_c)
+        cfg.viewer_show_sp_abs = bool(cfg.viewer_show_sp_abs)
+        cfg.viewer_show_sp_autotune = bool(cfg.viewer_show_sp_autotune)
+        cfg.viewer_show_mae = bool(cfg.viewer_show_mae)
         # ensure serial_params keys
         if not isinstance(cfg.last_serial_params, dict):
             cfg.last_serial_params = {}
