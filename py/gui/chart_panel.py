@@ -17,11 +17,16 @@ from datetime import datetime, timedelta
 import json
 import traceback
 from zoneinfo import ZoneInfo
+import logging
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib.ticker import ScalarFormatter
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+
+
+LOGGER = logging.getLogger("cn616a.gui")
 
 
 class ZoneNavigationToolbar(NavigationToolbar2Tk):
@@ -134,6 +139,7 @@ def _get_latest_timestamp(log_files: List[Path], debug: bool = False) -> Optiona
         except Exception:
             if debug:
                 print(f"[_get_latest_timestamp] failed reading {log_file.name}: {traceback.format_exc()}")
+            LOGGER.exception("Failed reading latest timestamp from %s", log_file)
             continue
 
     return None
@@ -311,6 +317,7 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
 
         except Exception as e:
             print(f"[load_telemetry_points] Error reading {log_file}: {e}")
+            LOGGER.exception("load_telemetry_points failed reading %s", log_file)
             if debug:
                 print(f"[load_telemetry_points] {traceback.format_exc()}")
             continue
@@ -357,6 +364,9 @@ class ZoneChartPanel(tk.Frame):
         self.sp_color = viewer_cfg.get("sp_color", "red")
         self.sp_autotune_color = viewer_cfg.get("sp_autotune_color", "purple")
         self.line_width = viewer_cfg.get("line_width", 2.5)
+        self.show_sp_abs = bool(viewer_cfg.get("show_sp_abs", True))
+        self.show_sp_autotune = bool(viewer_cfg.get("show_sp_autotune", True))
+        self.show_mae = bool(viewer_cfg.get("show_mae", True))
         
         # Data for this zone only
         self.zone_data = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
@@ -375,6 +385,7 @@ class ZoneChartPanel(tk.Frame):
         self.metrics_label: Optional[ttk.Label] = None
         self.ax_pv = None
         self.ax_sp = None
+        self.current_mae: Optional[float] = None
 
         # View state (for preserving user zoom/pan view)
         self._updating_plot = False
@@ -383,6 +394,7 @@ class ZoneChartPanel(tk.Frame):
         self._locked_view: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
         self._interaction_active = False
         self._pending_zone_data: Optional[Dict[str, List[Any]]] = None
+        self._draw_scheduled = False
         
         self.create_widgets()
         
@@ -504,6 +516,9 @@ class ZoneChartPanel(tk.Frame):
         in_equilibrium = analysis_metrics.get("in_equilibrium")
         avg_error = analysis_metrics.get("avg_abs_error_c")
 
+        mae_value = float(avg_error) if isinstance(avg_error, (int, float)) else None
+        self.current_mae = mae_value
+
         pv_txt = f"{float(pv):.2f}°C" if isinstance(pv, (int, float)) else "N/A"
         sp_txt = f"{float(sp):.2f}°C" if isinstance(sp, (int, float)) else "N/A"
         if autotune_enable.upper() == "ENABLE":
@@ -528,6 +543,8 @@ class ZoneChartPanel(tk.Frame):
         row1 = f"PV: {pv_txt}   SP: {sp_txt}   Equilibrium? {eq_txt}   MAE (|e|): {avg_err_txt}"
         row2 = f"Control: {control_method}   AT: {at_state} ({at_sp_txt})   P: {p_txt}   I: {i_txt}   D: {d_txt}"
         self.metrics_label.config(text=f"{row1}\n{row2}")
+
+        # Do not force an immediate redraw from metrics updates; chart refresh loop handles plotting.
 
     def set_zone_data(self, new_zone_data: Dict[str, List[Any]]):
         """Set new zone data and redraw only when changed."""
@@ -577,6 +594,7 @@ class ZoneChartPanel(tk.Frame):
         except Exception as e:
             if self.debug:
                 print(f"[ZoneChartPanel.set_zone_data Z{self.zone_id}] {traceback.format_exc()}")
+            LOGGER.exception("ZoneChartPanel.set_zone_data failed for zone %s", self.zone_id)
     
     def clear_chart(self):
         """Clear this zone's chart display and set cutoff to now.
@@ -653,6 +671,37 @@ class ZoneChartPanel(tk.Frame):
         self._view_locked = False
         self._locked_view = None
 
+    def _safe_request_draw(self):
+        """Request a deferred canvas draw while avoiding re-entrant render calls."""
+        if self.canvas is None:
+            return
+        try:
+            widget = self.canvas.get_tk_widget()
+            if widget is None or not widget.winfo_exists():
+                return
+        except Exception:
+            LOGGER.exception("Failed checking chart widget state before draw")
+            return
+
+        if self._draw_scheduled:
+            return
+
+        self._draw_scheduled = True
+
+        def _draw_once():
+            self._draw_scheduled = False
+            try:
+                if self.canvas is not None:
+                    self.canvas.draw_idle()
+            except Exception:
+                LOGGER.exception("Deferred chart draw failed for zone %s", self.zone_id)
+
+        try:
+            self.after_idle(_draw_once)
+        except Exception:
+            self._draw_scheduled = False
+            LOGGER.exception("Failed scheduling deferred chart draw for zone %s", self.zone_id)
+
     @staticmethod
     def _views_close(a, b, tol=1e-9):
         for pair_a, pair_b in zip(a, b):
@@ -694,7 +743,7 @@ class ZoneChartPanel(tk.Frame):
             if not times:
                 ax_pv.text(0.5, 0.5, "No data", ha="center", va="center", 
                           transform=ax_pv.transAxes, fontsize=14)
-                self.canvas.draw()
+                self._safe_request_draw()
                 return
             
             # Determine x-range from data itself and cap to configured history window
@@ -719,22 +768,22 @@ class ZoneChartPanel(tk.Frame):
                 if self.debug:
                     print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(pv_vals)} PV points")
             
-            # Plot absolute setpoint on right axis
+            # Plot absolute setpoint on left axis
             sp_times = [t for t, s in zip(times_display, sps) if s is not None]
             sp_vals = [s for s in sps if s is not None]
-            if sp_vals:
-                ax_sp.plot(sp_times, sp_vals,
+            if self.show_sp_abs and sp_vals:
+                ax_pv.plot(sp_times, sp_vals,
                            color=self.sp_color,
                            linewidth=self.line_width,
                            label="SP Abs", linestyle="-")
                 if self.debug:
                     print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(sp_vals)} SP Abs points")
             
-            # Plot autotune setpoint on right axis
+            # Plot autotune setpoint on left axis
             sp_auto_times = [t for t, s in zip(times_display, sp_autotunes) if s is not None]
             sp_auto_vals = [s for s in sp_autotunes if s is not None]
-            if sp_auto_vals:
-                ax_sp.plot(sp_auto_times, sp_auto_vals,
+            if self.show_sp_autotune and sp_auto_vals:
+                ax_pv.plot(sp_auto_times, sp_auto_vals,
                            color=self.sp_autotune_color,
                            linewidth=self.line_width,
                            label="SP Autotune", linestyle="--")
@@ -743,29 +792,53 @@ class ZoneChartPanel(tk.Frame):
             
             # Configure axes
             ax_pv.set_xlabel("Time", fontsize=10)
-            ax_pv.set_ylabel("PV (°C)", color="blue", fontsize=10, fontweight="bold")
-            ax_sp.set_ylabel("Setpoint (°C)", color="darkred", fontsize=10, fontweight="bold")
+            ax_pv.set_ylabel("Temperature (°C)", fontsize=10, fontweight="bold")
             
-            ax_pv.tick_params(axis="y", labelcolor="blue", labelsize=9)
-            ax_sp.tick_params(axis="y", labelcolor="darkred", labelsize=9)
+            ax_pv.tick_params(axis="y", labelsize=9)
             ax_pv.tick_params(axis="x", labelsize=9)
+
+            # Keep left Y-axis in plain decimal format (no scientific notation / offset).
+            y_formatter = ScalarFormatter(useOffset=False)
+            y_formatter.set_scientific(False)
+            ax_pv.yaxis.set_major_formatter(y_formatter)
+
+            # Plot latest MAE on secondary Y-axis as a live reference line.
+            if self.show_mae and self.current_mae is not None:
+                mae_val = float(self.current_mae)
+                ax_sp.plot(
+                    [min_time, max_time],
+                    [mae_val, mae_val],
+                    color="darkgreen",
+                    linewidth=max(1.5, float(self.line_width) * 0.8),
+                    linestyle=":",
+                    label="MAE",
+                )
+                ax_sp.set_ylabel("MAE (°C)", color="darkgreen", fontsize=10, fontweight="bold")
+                ax_sp.yaxis.set_label_position("right")
+                ax_sp.yaxis.tick_right()
+                ax_sp.tick_params(axis="y", right=True, labelright=True, labelcolor="darkgreen", labelsize=9)
+                ax_sp.tick_params(axis="x", bottom=False, labelbottom=False)
+                mae_formatter = ScalarFormatter(useOffset=False)
+                mae_formatter.set_scientific(False)
+                ax_sp.yaxis.set_major_formatter(mae_formatter)
+            else:
+                ax_sp.set_ylabel("")
+                ax_sp.set_yticks([])
+                ax_sp.tick_params(axis="y", right=True, labelright=False)
+                ax_sp.tick_params(axis="x", bottom=False, labelbottom=False)
             
             # Set X-axis range using computed bounds
             ax_pv.set_xlim(min_time, max_time)
             ax_pv.xaxis.set_major_locator(mdates.AutoDateLocator())
             ax_pv.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S", tz=display_tz))
             
-            # Rotate x-axis labels
-            for label in ax_pv.get_xticklabels():
-                label.set_rotation(45)
-                label.set_ha("right")
+            # Rotate x-axis labels using axis-level API to avoid per-label tick object churn.
+            ax_pv.tick_params(axis="x", labelrotation=45)
             
             ax_pv.grid(True, alpha=0.3, linestyle="-", linewidth=0.5)
             
-            # Add combined legend
-            lines_pv = ax_pv.get_lines()
-            lines_sp = ax_sp.get_lines()
-            all_lines = lines_pv + lines_sp
+            # Add combined legend for temperature and MAE traces.
+            all_lines = ax_pv.get_lines() + ax_sp.get_lines()
             if all_lines:
                 labels = [l.get_label() for l in all_lines]
                 legend = ax_pv.legend(all_lines, labels, loc="upper left", fontsize=9)
@@ -780,12 +853,8 @@ class ZoneChartPanel(tk.Frame):
                 self._apply_view(previous_locked_view)
                 self._locked_view = previous_locked_view
             
-            # Tight layout
-            self.fig.tight_layout()
-            
-            # Redraw canvas
-            self.canvas.draw()
-            self.canvas.get_tk_widget().update_idletasks()
+            # Redraw canvas (deferred/coalesced for stability on TkAgg).
+            self._safe_request_draw()
             
             if self.debug:
                 print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] Canvas drawn successfully")
@@ -793,6 +862,7 @@ class ZoneChartPanel(tk.Frame):
         except Exception as e:
             error_msg = f"Plot error: {str(e)}"
             self.status_label.config(text=error_msg)
+            LOGGER.exception("ZoneChartPanel._update_plot failed for zone %s", self.zone_id)
             if self.debug:
                 print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] {error_msg}\n{traceback.format_exc()}")
         finally:
@@ -855,6 +925,9 @@ class ChartPanel(tk.Frame):
                 "pv_color": svc_cfg.get("viewer_pv_color", "blue"),
                 "sp_color": svc_cfg.get("viewer_sp_color", "red"),
                 "sp_autotune_color": svc_cfg.get("viewer_sp_autotune_color", "purple"),
+                "show_sp_abs": svc_cfg.get("viewer_show_sp_abs", True),
+                "show_sp_autotune": svc_cfg.get("viewer_show_sp_autotune", True),
+                "show_mae": svc_cfg.get("viewer_show_mae", True),
             }
         self._update_title(float(viewer_cfg.get("history_hours", 1.0) or 1.0))
 
@@ -940,6 +1013,7 @@ class ChartPanel(tk.Frame):
         except Exception:
             if self.debug:
                 print(f"[ChartPanel.refresh] {traceback.format_exc()}")
+            LOGGER.exception("ChartPanel.refresh failed")
     
     def stop_auto_refresh(self):
         """Stop auto-refresh on all zone panels."""
@@ -958,6 +1032,9 @@ class ChartPanel(tk.Frame):
             panel.pv_color = viewer_cfg.get("pv_color", panel.pv_color)
             panel.sp_color = viewer_cfg.get("sp_color", panel.sp_color)
             panel.sp_autotune_color = viewer_cfg.get("sp_autotune_color", panel.sp_autotune_color)
+            panel.show_sp_abs = bool(viewer_cfg.get("show_sp_abs", panel.show_sp_abs))
+            panel.show_sp_autotune = bool(viewer_cfg.get("show_sp_autotune", panel.show_sp_autotune))
+            panel.show_mae = bool(viewer_cfg.get("show_mae", panel.show_mae))
             panel._update_zone_header()
             panel._update_plot()
 

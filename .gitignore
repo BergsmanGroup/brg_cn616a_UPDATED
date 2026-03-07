@@ -5,3 +5,8 @@ logs/cn616a_config_state.json
 logs/cn616a_service_config_state.json
 logs/cn616a_telemetry_state.json
 logs/_debug_axis.png
+/.venv/Lib/site-packages/matplotlib/tests
+/.venv/Lib/site-packages/numpy-2.4.2.dist-info
+/.venv/Lib/site-packages
+/.venv
+.python-version

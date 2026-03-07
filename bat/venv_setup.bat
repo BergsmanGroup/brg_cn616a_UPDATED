@@ -5,8 +5,9 @@ REM ============================================
 REM Configuration
 REM ============================================
 
-set PYTHON_VERSION=3.13
+set PYTHON_VERSION=3.12
 set VENV_NAME=.venv
+set PYTHON_CMD=
 
 REM Resolve repo root (this file is in repo_root\bat)
 set SCRIPT_DIR=%~dp0
@@ -15,19 +16,41 @@ set REPO_ROOT=%CD%
 
 echo Creating virtual environment using Python %PYTHON_VERSION%...
 
-REM Quick version check (major.minor)
-for /f "tokens=1,2 delims=." %%a in ('python -c "import sys; print(str(sys.version_info[0])+'.'+str(sys.version_info[1]))"') do (
-  set FOUND_VER=%%a.%%b
+where py >nul 2>nul
+if not errorlevel 1 (
+  py -%PYTHON_VERSION% -c "import sys; print(sys.version)" >nul 2>nul
+  if not errorlevel 1 (
+    set "PYTHON_CMD=py -%PYTHON_VERSION%"
+  )
 )
 
-if not "!FOUND_VER!"=="%PYTHON_VERSION%" (
-  echo ERROR: python on PATH is !FOUND_VER! but you requested %PYTHON_VERSION%.
-  echo Fix PATH order or install Python %PYTHON_VERSION%.
+if "%PYTHON_CMD%"=="" (
+  if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
+    "%LocalAppData%\Programs\Python\Python312\python.exe" -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')" > "%TEMP%\cn616a_pyver.txt" 2>nul
+    set /p FOUND_VER=<"%TEMP%\cn616a_pyver.txt"
+    del "%TEMP%\cn616a_pyver.txt" >nul 2>nul
+    if "!FOUND_VER!"=="%PYTHON_VERSION%" (
+      set "PYTHON_CMD=%LocalAppData%\Programs\Python\Python312\python.exe"
+    )
+  )
+)
+
+if "%PYTHON_CMD%"=="" (
+  echo ERROR: Could not locate Python %PYTHON_VERSION%.
+  echo Install Python %PYTHON_VERSION% and rerun this script.
+  echo Expected commands: py -%PYTHON_VERSION% -V
+  echo Expected path: %LocalAppData%\Programs\Python\Python312\python.exe
+  popd
   pause
   exit /b 1
 )
 
-python -m venv %VENV_NAME%
+if exist "%VENV_NAME%" (
+  echo Removing existing %VENV_NAME% to rebuild with Python %PYTHON_VERSION%...
+  rmdir /s /q "%VENV_NAME%"
+)
+
+%PYTHON_CMD% -m venv %VENV_NAME%
 IF %ERRORLEVEL% NEQ 0 (
     echo Failed to create virtual environment.
   popd

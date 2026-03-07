@@ -90,6 +90,22 @@ def stable_hash(obj: Any) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+def load_persisted_service_config(out_dir: Path) -> Optional["ServiceConfig"]:
+    """Load last service config snapshot if present."""
+    state_path = Path(out_dir) / "cn616a_service_config_state.json"
+    if not state_path.exists():
+        return None
+
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+        cfg_obj = raw.get("config", {}) if isinstance(raw, dict) else {}
+        if isinstance(cfg_obj, dict):
+            return ServiceConfig.from_dict(cfg_obj)
+    except Exception:
+        pass
+    return None
+
+
 # -----------------------------
 # Command server (JSONL over TCP)
 # -----------------------------
@@ -979,12 +995,16 @@ def main() -> None:
     # legacy simple cadence knob (caps max loop cadence)
     ap.add_argument("--poll", type=float, default=0.5, help="Max telemetry period in seconds (default 0.5)")
 
-    # service-config defaults at startup
-    ap.add_argument("--telemetry-hz", type=float, default=2.0)
-    ap.add_argument("--config-hz", type=float, default=0.2)
-    ap.add_argument("--rampsoak-hz", type=float, default=0.0)
-    ap.add_argument("--zones", default="auto", help="auto or comma list e.g. 1,2,3")
-    ap.add_argument("--flush-each-line", action="store_true", help="Flush JSONL after each write")
+    # Optional startup overrides; if omitted, persisted settings are reused.
+    ap.add_argument("--telemetry-hz", type=float, default=None)
+    ap.add_argument("--config-hz", type=float, default=None)
+    ap.add_argument("--rampsoak-hz", type=float, default=None)
+    ap.add_argument("--zones", default=None, help="auto or comma list e.g. 1,2,3")
+    flush_group = ap.add_mutually_exclusive_group()
+    flush_group.add_argument("--flush-each-line", dest="flush_each_line", action="store_const", const=True,
+                             default=None, help="Flush JSONL after each write")
+    flush_group.add_argument("--no-flush-each-line", dest="flush_each_line", action="store_const", const=False,
+                             default=None, help="Do not flush JSONL after each write")
 
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
@@ -997,21 +1017,25 @@ def main() -> None:
     if not map_path.is_absolute():
         map_path = (repo_root / map_path).resolve()
 
-    # Zones
-    zones_mode = "auto"
-    zones_list: list[int] = [1, 2, 3, 4, 5, 6]
-    if str(args.zones).strip().lower() != "auto":
-        zones_mode = "list"
-        zones_list = [int(x.strip()) for x in str(args.zones).split(",") if x.strip()]
+    cfg = load_persisted_service_config(out_dir) or ServiceConfig()
 
-    cfg = ServiceConfig(
-        telemetry_hz=float(args.telemetry_hz),
-        config_hz=float(args.config_hz),
-        rampsoak_hz=float(args.rampsoak_hz),
-        zones_mode=zones_mode,
-        zones_list=zones_list,
-        flush_each_line=bool(args.flush_each_line),
-    )
+    if args.telemetry_hz is not None:
+        cfg.telemetry_hz = float(args.telemetry_hz)
+    if args.config_hz is not None:
+        cfg.config_hz = float(args.config_hz)
+    if args.rampsoak_hz is not None:
+        cfg.rampsoak_hz = float(args.rampsoak_hz)
+
+    if args.zones is not None:
+        if str(args.zones).strip().lower() == "auto":
+            cfg.zones_mode = "auto"
+            cfg.zones_list = [1, 2, 3, 4, 5, 6]
+        else:
+            cfg.zones_mode = "list"
+            cfg.zones_list = [int(x.strip()) for x in str(args.zones).split(",") if x.strip()]
+
+    if args.flush_each_line is not None:
+        cfg.flush_each_line = bool(args.flush_each_line)
 
     svc = CN616AService(
         port=str(args.port),

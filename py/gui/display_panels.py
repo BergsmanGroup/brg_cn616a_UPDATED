@@ -9,12 +9,12 @@ import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-import threading
 import time
 import traceback
 import json
 import socket
 import uuid
+import logging
 from datetime import datetime
 
 from .state_reader import (
@@ -22,6 +22,8 @@ from .state_reader import (
     get_service_config_state,
     format_timestamp, safe_get
 )
+
+LOGGER = logging.getLogger("cn616a.gui")
 
 
 def _normalize_zone_names(raw: Any) -> Dict[str, str]:
@@ -52,9 +54,8 @@ class StatePanel(tk.Frame):
         self.logs_dir = Path(logs_dir)
         self.auto_refresh_interval = auto_refresh_interval
         self.debug = debug
-        self.refresh_thread = None
         self.running = False
-        self._stop_event = threading.Event()
+        self._after_id: Optional[str] = None
     
     def _debug_log(self, msg: str):
         """Print debug message only if debug mode is enabled."""
@@ -62,28 +63,42 @@ class StatePanel(tk.Frame):
             print(msg)
     
     def start_auto_refresh(self):
-        """Start background thread that refreshes display."""
+        """Start main-thread refresh loop."""
         if self.running:
             return
-        self._stop_event.clear()
         self.running = True
-        self.refresh_thread = threading.Thread(target=self._refresh_loop, daemon=True)
-        self.refresh_thread.start()
+        self._schedule_refresh(initial=True)
     
     def stop_auto_refresh(self):
-        """Stop background refresh thread."""
+        """Stop main-thread refresh loop."""
         self.running = False
-        self._stop_event.set()
-    
-    def _refresh_loop(self):
-        """Background thread that periodically refreshes."""
-        while self.running and not self._stop_event.is_set():
+        if self._after_id is not None:
             try:
-                self.after(0, self.refresh)
+                self.after_cancel(self._after_id)
             except Exception:
-                pass
-            if self._stop_event.wait(self.auto_refresh_interval):
-                break
+                LOGGER.exception("Failed canceling refresh timer")
+            finally:
+                self._after_id = None
+    
+    def _schedule_refresh(self, *, initial: bool = False):
+        if not self.running:
+            return
+        delay_ms = 0 if initial else max(100, int(float(self.auto_refresh_interval) * 1000))
+        self._after_id = self.after(delay_ms, self._refresh_tick)
+
+    def _refresh_tick(self):
+        self._after_id = None
+        if not self.running:
+            return
+        try:
+            self.refresh()
+        except tk.TclError:
+            LOGGER.info("Stopping refresh loop after TclError during shutdown")
+            self.running = False
+            return
+        except Exception:
+            LOGGER.exception("Unhandled exception in panel refresh loop")
+        self._schedule_refresh()
     
     def refresh(self):
         """Override in subclass to update display."""
@@ -344,10 +359,12 @@ class TelemetryPanel(StatePanel):
         except TypeError as e:
             error_msg = f"Type Error - {str(e)}\n{traceback.format_exc()}"
             print(f"[TelemetryPanel.refresh] {error_msg}")
+            LOGGER.exception("TelemetryPanel.refresh type error")
             self.info_label.config(text=f"Error: {str(e)}")
         except Exception as e:
             error_msg = f"Error: {type(e).__name__} - {str(e)}\n{traceback.format_exc()}"
             print(f"[TelemetryPanel.refresh] {error_msg}")
+            LOGGER.exception("TelemetryPanel.refresh failed")
             self.info_label.config(text=f"Error: {str(e)}")
 
 
@@ -402,8 +419,39 @@ class ConfigPanel(StatePanel):
         self.service_actions_frame.pack(fill=tk.X, padx=10, pady=(0, 6))
         ttk.Button(self.service_actions_frame, text="Apply Service Settings", command=self._on_apply_settings_clicked).pack(side=tk.RIGHT)
 
-        self.service_form_frame = ttk.Frame(self.service_frame)
-        self.service_form_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # Scrollable form container to keep all controls accessible on smaller windows
+        service_form_container = ttk.Frame(self.service_frame)
+        service_form_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.service_form_canvas = tk.Canvas(service_form_container, highlightthickness=0)
+        self.service_form_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.service_form_scrollbar = ttk.Scrollbar(
+            service_form_container,
+            orient=tk.VERTICAL,
+            command=self.service_form_canvas.yview,
+        )
+        self.service_form_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.service_form_canvas.configure(yscrollcommand=self.service_form_scrollbar.set)
+
+        self.service_form_frame = ttk.Frame(self.service_form_canvas)
+        self._service_form_window = self.service_form_canvas.create_window(
+            (0, 0), window=self.service_form_frame, anchor="nw"
+        )
+
+        self.service_form_frame.bind(
+            "<Configure>",
+            lambda _event: self.service_form_canvas.configure(
+                scrollregion=self.service_form_canvas.bbox("all")
+            ),
+        )
+        self.service_form_canvas.bind(
+            "<Configure>",
+            lambda event: self.service_form_canvas.itemconfigure(
+                self._service_form_window, width=event.width
+            ),
+        )
+
         self.service_form_frame.columnconfigure(0, weight=1)
         self.service_form_frame.columnconfigure(1, weight=1)
 
@@ -483,10 +531,12 @@ class ConfigPanel(StatePanel):
         # ---- Zones section ----
         zones_box = ttk.LabelFrame(self.service_form_frame, text="Zones")
         zones_box.grid(row=2, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
+        zones_box.columnconfigure(1, weight=1)
+        zones_box.columnconfigure(3, weight=1)
 
         self.zones_mode_var = tk.StringVar(value="auto")
-        self.zones_list_entry = ttk.Entry(zones_box, width=26)
-        self.zone_name_entries = {str(z): ttk.Entry(zones_box, width=26) for z in range(1, 7)}
+        self.zones_list_entry = ttk.Entry(zones_box, width=20)
+        self.zone_name_entries = {str(z): ttk.Entry(zones_box, width=20) for z in range(1, 7)}
 
         ttk.Label(zones_box, text="Mode:").grid(row=0, column=0, sticky="e", padx=(8, 8), pady=3)
         mode_frame = ttk.Frame(zones_box)
@@ -495,15 +545,16 @@ class ConfigPanel(StatePanel):
         ttk.Radiobutton(mode_frame, text="List", variable=self.zones_mode_var, value="list", command=self._on_form_edited).pack(side=tk.LEFT, padx=(8, 0))
 
         ttk.Label(zones_box, text="Zone list:").grid(row=1, column=0, sticky="e", padx=(8, 8), pady=3)
-        self.zones_list_entry.grid(row=1, column=1, sticky="w", padx=(0, 8), pady=3)
+        self.zones_list_entry.grid(row=1, column=1, columnspan=3, sticky="ew", padx=(0, 8), pady=3)
         self.zones_list_entry.bind("<KeyRelease>", self._on_form_edited)
         self.zones_list_entry.bind("<FocusOut>", self._on_form_edited)
 
         for idx in range(1, 7):
-            row = idx + 1
+            row = 2 + ((idx - 1) % 3)
+            col_offset = 0 if idx <= 3 else 2
             entry = self.zone_name_entries[str(idx)]
-            ttk.Label(zones_box, text=f"Zone {idx} name:").grid(row=row, column=0, sticky="e", padx=(8, 8), pady=3)
-            entry.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=3)
+            ttk.Label(zones_box, text=f"Zone {idx} name:").grid(row=row, column=col_offset, sticky="e", padx=(8, 8), pady=3)
+            entry.grid(row=row, column=col_offset + 1, sticky="ew", padx=(0, 8), pady=3)
             entry.bind("<KeyRelease>", self._on_form_edited)
             entry.bind("<FocusOut>", self._on_form_edited)
 
@@ -517,6 +568,9 @@ class ConfigPanel(StatePanel):
         self.viewer_pv_color = ttk.Combobox(viewer_box, width=15, state="readonly", values=color_options)
         self.viewer_sp_color = ttk.Combobox(viewer_box, width=15, state="readonly", values=color_options)
         self.viewer_sp_autotune_color = ttk.Combobox(viewer_box, width=15, state="readonly", values=color_options)
+        self.viewer_show_sp_abs_var = tk.BooleanVar(value=True)
+        self.viewer_show_sp_autotune_var = tk.BooleanVar(value=True)
+        self.viewer_show_mae_var = tk.BooleanVar(value=True)
 
         viewer_rows = [
             ("History (s)", self.viewer_history_hours),
@@ -533,6 +587,26 @@ class ConfigPanel(StatePanel):
                 widget.bind("<FocusOut>", self._on_form_edited)
             else:
                 widget.bind("<<ComboboxSelected>>", self._on_form_edited)
+
+        check_row = len(viewer_rows)
+        ttk.Checkbutton(
+            viewer_box,
+            text="Show SP Abs",
+            variable=self.viewer_show_sp_abs_var,
+            command=self._on_form_edited,
+        ).grid(row=check_row, column=1, sticky="w", padx=(0, 8), pady=(4, 2))
+        ttk.Checkbutton(
+            viewer_box,
+            text="Show SP Autotune",
+            variable=self.viewer_show_sp_autotune_var,
+            command=self._on_form_edited,
+        ).grid(row=check_row + 1, column=1, sticky="w", padx=(0, 8), pady=2)
+        ttk.Checkbutton(
+            viewer_box,
+            text="Show MAE",
+            variable=self.viewer_show_mae_var,
+            command=self._on_form_edited,
+        ).grid(row=check_row + 2, column=1, sticky="w", padx=(0, 8), pady=(2, 6))
 
         self.zone_config_labels = {}
     
@@ -574,10 +648,12 @@ class ConfigPanel(StatePanel):
         except TypeError as e:
             error_msg = f"Type Error - {str(e)}\n{traceback.format_exc()}"
             print(f"[ConfigPanel.refresh] {error_msg}")
+            LOGGER.exception("ConfigPanel.refresh type error")
             self.info_label.config(text=f"Error: {str(e)}")
         except Exception as e:
             error_msg = f"Error: {type(e).__name__} - {str(e)}\n{traceback.format_exc()}"
             print(f"[ConfigPanel.refresh] {error_msg}")
+            LOGGER.exception("ConfigPanel.refresh failed")
             self.info_label.config(text=f"Error: {str(e)}")
     
     def _set_entry_text(self, entry: ttk.Entry, value: Any):
@@ -643,6 +719,9 @@ class ConfigPanel(StatePanel):
             self._set_combo_value(self.viewer_pv_color, viewer.get("pv_color", "blue"))
             self._set_combo_value(self.viewer_sp_color, viewer.get("sp_color", "red"))
             self._set_combo_value(self.viewer_sp_autotune_color, viewer.get("sp_autotune_color", "purple"))
+            self.viewer_show_sp_abs_var.set(bool(viewer.get("show_sp_abs", True)))
+            self.viewer_show_sp_autotune_var.set(bool(viewer.get("show_sp_autotune", True)))
+            self.viewer_show_mae_var.set(bool(viewer.get("show_mae", True)))
             self._form_dirty = False
         finally:
             self._form_updating = False
@@ -660,6 +739,12 @@ class ConfigPanel(StatePanel):
             viewer["sp_color"] = cfg.get("viewer_sp_color")
         if "sp_autotune_color" not in viewer and cfg.get("viewer_sp_autotune_color") is not None:
             viewer["sp_autotune_color"] = cfg.get("viewer_sp_autotune_color")
+        if "show_sp_abs" not in viewer and cfg.get("viewer_show_sp_abs") is not None:
+            viewer["show_sp_abs"] = cfg.get("viewer_show_sp_abs")
+        if "show_sp_autotune" not in viewer and cfg.get("viewer_show_sp_autotune") is not None:
+            viewer["show_sp_autotune"] = cfg.get("viewer_show_sp_autotune")
+        if "show_mae" not in viewer and cfg.get("viewer_show_mae") is not None:
+            viewer["show_mae"] = cfg.get("viewer_show_mae")
         return viewer
 
     def _safe_float(self, value: str) -> Optional[float]:
@@ -784,6 +869,9 @@ class ConfigPanel(StatePanel):
             "pv_color": self.viewer_pv_color.get().strip() or "blue",
             "sp_color": self.viewer_sp_color.get().strip() or "red",
             "sp_autotune_color": self.viewer_sp_autotune_color.get().strip() or "purple",
+            "show_sp_abs": bool(self.viewer_show_sp_abs_var.get()),
+            "show_sp_autotune": bool(self.viewer_show_sp_autotune_var.get()),
+            "show_mae": bool(self.viewer_show_mae_var.get()),
         }
         return {
             "viewer": viewer,
@@ -792,6 +880,9 @@ class ConfigPanel(StatePanel):
             "viewer_pv_color": viewer["pv_color"],
             "viewer_sp_color": viewer["sp_color"],
             "viewer_sp_autotune_color": viewer["sp_autotune_color"],
+            "viewer_show_sp_abs": viewer["show_sp_abs"],
+            "viewer_show_sp_autotune": viewer["show_sp_autotune"],
+            "viewer_show_mae": viewer["show_mae"],
         }
 
     def _build_connection_patch(self) -> Dict[str, Any]:
@@ -1042,10 +1133,12 @@ class RampSoakPanel(StatePanel):
         except TypeError as e:
             error_msg = f"Type Error - {str(e)}\n{traceback.format_exc()}"
             print(f"[RampSoakPanel.refresh] {error_msg}")
+            LOGGER.exception("RampSoakPanel.refresh type error")
             self.info_label.config(text=f"Error: {str(e)}")
         except Exception as e:
             error_msg = f"Error: {type(e).__name__} - {str(e)}\n{traceback.format_exc()}"
             print(f"[RampSoakPanel.refresh] {error_msg}")
+            LOGGER.exception("RampSoakPanel.refresh failed")
             self.info_label.config(text=f"Error: {str(e)}")
 
 
