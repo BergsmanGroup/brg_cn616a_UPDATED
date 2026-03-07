@@ -112,3 +112,34 @@ Current thread 0x00003f6c (most recent call first):
   File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 392 in main
   File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 399 in <module>
 === GUI fault log session start: 2026-03-06T18:22:46.969707 ===
+Windows fatal exception: access violation
+
+Current thread 0x00003b38 (most recent call first):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\copy.py", line 134 in deepcopy
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\copy.py", line 221 in _deepcopy_dict
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\copy.py", line 136 in deepcopy
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\markers.py", line 323 in _set_marker
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\markers.py", line 248 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\lines.py", line 1372 in update_from
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1612 in _copy_tick_props
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1666 in get_major_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1283 in _update_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1404 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134 in _draw_list_compositing_images
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 3226 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134 in _draw_list_compositing_images
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\figure.py", line 3257 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 94 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_agg.py", line 382 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_tkagg.py", line 10 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\_backend_tk.py", line 302 in idle_draw
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 347 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 392 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 399 in <module>
+=== GUI fault log session start: 2026-03-06T18:26:31.945664 ===

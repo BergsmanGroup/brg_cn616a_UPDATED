@@ -15,13 +15,14 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Callable
 from datetime import datetime, timedelta
 import json
+import math
 import traceback
 from zoneinfo import ZoneInfo
 import logging
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from matplotlib.ticker import ScalarFormatter
+from matplotlib.ticker import ScalarFormatter, MaxNLocator
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
@@ -910,8 +911,12 @@ class ZoneChartPanel(tk.Frame):
                 min_time = max_time - timedelta(minutes=1)
             
             # Plot PV on left axis (solid blue line)
-            pv_times = [t for t, p in zip(times_display, pvs) if p is not None]
-            pv_vals = [p for p in pvs if p is not None]
+            pv_times = []
+            pv_vals = []
+            for t, p in zip(times_display, pvs):
+                if isinstance(p, (int, float)) and math.isfinite(float(p)):
+                    pv_times.append(t)
+                    pv_vals.append(float(p))
             if pv_vals:
                 ax_pv.plot(pv_times, pv_vals,
                            color=self.pv_color,
@@ -921,8 +926,12 @@ class ZoneChartPanel(tk.Frame):
                     print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(pv_vals)} PV points")
             
             # Plot absolute setpoint on left axis
-            sp_times = [t for t, s in zip(times_display, sps) if s is not None]
-            sp_vals = [s for s in sps if s is not None]
+            sp_times = []
+            sp_vals = []
+            for t, s in zip(times_display, sps):
+                if isinstance(s, (int, float)) and math.isfinite(float(s)):
+                    sp_times.append(t)
+                    sp_vals.append(float(s))
             if self.show_sp_abs and sp_vals:
                 ax_pv.plot(sp_times, sp_vals,
                            color=self.sp_color,
@@ -932,8 +941,12 @@ class ZoneChartPanel(tk.Frame):
                     print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(sp_vals)} SP Abs points")
             
             # Plot autotune setpoint on left axis
-            sp_auto_times = [t for t, s in zip(times_display, sp_autotunes) if s is not None]
-            sp_auto_vals = [s for s in sp_autotunes if s is not None]
+            sp_auto_times = []
+            sp_auto_vals = []
+            for t, s in zip(times_display, sp_autotunes):
+                if isinstance(s, (int, float)) and math.isfinite(float(s)):
+                    sp_auto_times.append(t)
+                    sp_auto_vals.append(float(s))
             if self.show_sp_autotune and sp_auto_vals:
                 ax_pv.plot(sp_auto_times, sp_auto_vals,
                            color=self.sp_autotune_color,
@@ -968,7 +981,11 @@ class ZoneChartPanel(tk.Frame):
 
             if self.show_mae and mae_pairs:
                 mae_plot_times = [t for t, _ in mae_pairs]
-                mae_plot_vals = [float(v) for _, v in mae_pairs]
+                mae_plot_vals = [float(v) for _, v in mae_pairs if math.isfinite(float(v))]
+                if not mae_plot_vals:
+                    mae_plot_times = []
+
+            if self.show_mae and mae_pairs and mae_plot_vals:
                 ax_sp.plot(
                     mae_plot_times,
                     mae_plot_vals,
@@ -1004,6 +1021,8 @@ class ZoneChartPanel(tk.Frame):
                 ax_sp.set_ylabel("MAE (°C)", color="darkgreen", fontsize=10, fontweight="bold")
                 ax_sp.yaxis.set_label_position("right")
                 ax_sp.yaxis.tick_right()
+                # Use a fixed tick-count locator to reduce backend churn in tick generation.
+                ax_sp.yaxis.set_major_locator(MaxNLocator(nbins=4, min_n_ticks=3))
                 ax_sp.tick_params(axis="y", right=True, labelright=True, labelcolor="darkgreen", labelsize=9)
                 ax_sp.tick_params(axis="x", bottom=False, labelbottom=False)
                 mae_formatter = ScalarFormatter(useOffset=False)
