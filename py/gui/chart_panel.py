@@ -16,6 +16,7 @@ from typing import Dict, List, Tuple, Optional, Any, Callable
 from datetime import datetime, timedelta
 import json
 import math
+import statistics
 import traceback
 from zoneinfo import ZoneInfo
 import logging
@@ -189,6 +190,61 @@ def parse_iso_timestamp(ts_str: str) -> Optional[datetime]:
         return datetime.fromisoformat(ts_str)
     except Exception:
         return None
+
+
+def _insert_time_gaps(
+    times: List[datetime],
+    values: List[float],
+    *,
+    gap_factor: float = 2.5,
+    min_gap_seconds: float = 5.0,
+) -> Tuple[List[datetime], List[float]]:
+    """Insert NaN separators where timestamp gaps exceed expected cadence.
+
+    Matplotlib breaks line segments when Y is NaN, which visually exposes data dropouts.
+    """
+    if len(times) <= 1 or len(values) <= 1:
+        return (times, values)
+
+    pair_count = min(len(times), len(values))
+    if pair_count <= 1:
+        return (times[:pair_count], values[:pair_count])
+
+    deltas: List[float] = []
+    for i in range(1, pair_count):
+        try:
+            dt_seconds = float((times[i] - times[i - 1]).total_seconds())
+        except Exception:
+            continue
+        if dt_seconds > 0:
+            deltas.append(dt_seconds)
+
+    if not deltas:
+        return (times[:pair_count], values[:pair_count])
+
+    median_delta = float(statistics.median_low(deltas))
+    gap_threshold = max(float(min_gap_seconds), float(gap_factor) * median_delta)
+
+    out_times: List[datetime] = [times[0]]
+    out_values: List[float] = [float(values[0])]
+
+    for i in range(1, pair_count):
+        curr_time = times[i]
+        curr_value = float(values[i])
+
+        try:
+            dt_seconds = float((curr_time - times[i - 1]).total_seconds())
+        except Exception:
+            dt_seconds = 0.0
+
+        if dt_seconds > gap_threshold:
+            out_times.append(curr_time)
+            out_values.append(float("nan"))
+
+        out_times.append(curr_time)
+        out_values.append(curr_value)
+
+    return (out_times, out_values)
 
 
 def find_jsonl_log_files(logs_dir: Path, main_name: str, rotated_pattern: str) -> List[Path]:
@@ -918,7 +974,8 @@ class ZoneChartPanel(tk.Frame):
                     pv_times.append(t)
                     pv_vals.append(float(p))
             if pv_vals:
-                ax_pv.plot(pv_times, pv_vals,
+                pv_plot_times, pv_plot_vals = _insert_time_gaps(pv_times, pv_vals)
+                ax_pv.plot(pv_plot_times, pv_plot_vals,
                            color=self.pv_color,
                            linewidth=self.line_width,
                            label="PV", linestyle="-")
@@ -933,7 +990,8 @@ class ZoneChartPanel(tk.Frame):
                     sp_times.append(t)
                     sp_vals.append(float(s))
             if self.show_sp_abs and sp_vals:
-                ax_pv.plot(sp_times, sp_vals,
+                sp_plot_times, sp_plot_vals = _insert_time_gaps(sp_times, sp_vals)
+                ax_pv.plot(sp_plot_times, sp_plot_vals,
                            color=self.sp_color,
                            linewidth=self.line_width,
                            label="SP Abs", linestyle="-")
@@ -948,7 +1006,8 @@ class ZoneChartPanel(tk.Frame):
                     sp_auto_times.append(t)
                     sp_auto_vals.append(float(s))
             if self.show_sp_autotune and sp_auto_vals:
-                ax_pv.plot(sp_auto_times, sp_auto_vals,
+                sp_auto_plot_times, sp_auto_plot_vals = _insert_time_gaps(sp_auto_times, sp_auto_vals)
+                ax_pv.plot(sp_auto_plot_times, sp_auto_plot_vals,
                            color=self.sp_autotune_color,
                            linewidth=self.line_width,
                            label="SP Autotune", linestyle="--")
@@ -986,6 +1045,7 @@ class ZoneChartPanel(tk.Frame):
                     mae_plot_times = []
 
             if self.show_mae and mae_pairs and mae_plot_vals:
+                mae_plot_times, mae_plot_vals = _insert_time_gaps(mae_plot_times, mae_plot_vals)
                 ax_sp.plot(
                     mae_plot_times,
                     mae_plot_vals,

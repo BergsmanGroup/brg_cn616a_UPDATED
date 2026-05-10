@@ -49,6 +49,22 @@ Start on COM4:
 .\bat\service_start.bat --port COM4 --unit 1 --tcp-port 8765 --verbose
 ```
 
+Start using last saved serial port (`logs\cn616a_service_config_state.json`) or `CN616A_SERIAL_PORT`:
+
+```powershell
+.\bat\service_start.bat
+```
+
+If the service is already running, `service_start.bat` reports that and exits without starting a second copy.
+
+## 3b) Stop service
+
+```powershell
+.\bat\service_stop.bat
+```
+
+This sends a clean `shutdown` command to the currently running service endpoint.
+
 ## 4) Start GUI (always via `.venv`)
 
 Show help:
@@ -85,3 +101,5 @@ $env:CN616A_SERVICE_TCP_PORT = "8765"
 
 - `cli.bat`, `service_start.bat`, and `gui_start.bat` fail fast if `.venv` is missing.
 - If needed, rerun setup first: `.\bat\venv_setup.bat`.
+- `service_start.bat` and `gui_start.bat` now pause on startup errors so double-click launches do not instantly disappear.
+- `gui_start.bat` starts the service as a separate process; closing the GUI does not stop the service.

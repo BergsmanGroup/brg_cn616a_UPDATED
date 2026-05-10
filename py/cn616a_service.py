@@ -51,8 +51,11 @@ import hashlib
 import json
 import os
 import socket
+import sys
 import threading
 import time
+import logging
+from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +64,52 @@ from typing import Any, Dict, Optional, Sequence, Tuple, Union
 from collections import deque
 
 from cn616a import CN616A, CN616AError, SerialParams
+
+
+LOGGER = logging.getLogger("cn616a.service")
+
+
+def _setup_service_logging(logs_dir: Path, verbose: bool = False) -> logging.Logger:
+    """Configure persistent runtime logging for the service process."""
+    logs_dir = Path(logs_dir)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("cn616a.service")
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    logger.propagate = False
+
+    has_file_handler = any(
+        isinstance(h, RotatingFileHandler)
+        and getattr(h, "baseFilename", "").endswith("cn616a_service_error.log")
+        for h in logger.handlers
+    )
+    if not has_file_handler:
+        handler = RotatingFileHandler(
+            logs_dir / "cn616a_service_error.log",
+            maxBytes=1_000_000,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+        logger.addHandler(handler)
+
+    return logger
+
+
+def _install_exception_hooks(logger: logging.Logger) -> None:
+    """Capture uncaught process/thread exceptions in service log."""
+    def _uncaught(exc_type, exc_value, exc_tb):
+        logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+
+    def _thread_uncaught(args):
+        logger.critical(
+            "Unhandled thread exception in %s",
+            getattr(args.thread, "name", "<unknown>"),
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _uncaught
+    threading.excepthook = _thread_uncaught
 
 
 # -----------------------------
@@ -139,6 +188,7 @@ def command_server(
     #if verbose:
     if True: #always print this info
         print(f"[service] command server listening on {host}:{port}")
+    LOGGER.info("Command server listening on %s:%s", host, port)
 
     while not stop_evt.is_set():
         try:
@@ -151,6 +201,7 @@ def command_server(
         #if verbose:
         if True: #always print this info
             print(f"[service] client connected: {addr}")
+        LOGGER.info("Client connected: %s", addr)
 
         conn.settimeout(5.0)
         with conn:
@@ -177,6 +228,7 @@ def command_server(
                     try:
                         cmd = json.loads(line.decode("utf-8"))
                     except Exception as e:
+                        LOGGER.exception("Bad JSON from client %s", addr)
                         resp = {"ok": False, "error": f"Bad JSON: {e}"}
                         try:
                             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
@@ -890,6 +942,7 @@ class CN616AService:
 
         except Exception as e:
             self._last_err = f"{type(e).__name__}: {e}"
+            LOGGER.exception("Command failed op=%r id=%r", op, cid)
             return {"id": cid, "ok": False, "error": self._last_err}
 
     # -----------------------------
@@ -960,6 +1013,7 @@ class CN616AService:
                     ok = False
                     err = f"{type(e).__name__}: {e}"
                     self._last_err = err
+                    LOGGER.exception("Telemetry poll failed")
 
                 next_tel = now + tel_period
                 cycle_ms = int((time.monotonic() - cycle_t0) * 1000)
@@ -977,6 +1031,7 @@ class CN616AService:
                     self.poll_config()
                 except Exception as e:
                     self._last_err = f"{type(e).__name__}: {e}"
+                    LOGGER.exception("Config poll failed")
                 next_cfg = now + cfg_period
 
             now = time.monotonic()
@@ -989,6 +1044,7 @@ class CN616AService:
                         self.poll_rampsoak()
                     except Exception as e:
                         self._last_err = f"{type(e).__name__}: {e}"
+                        LOGGER.exception("Ramp/soak poll failed")
                 next_rs = now + rs_period
 
             now = time.monotonic()
@@ -1001,6 +1057,7 @@ class CN616AService:
                         self.poll_analysis()
                     except Exception as e:
                         self._last_err = f"{type(e).__name__}: {e}"
+                        LOGGER.exception("Analysis poll failed")
                 next_an = now + an_period
 
             # Avoid busy loop
@@ -1047,6 +1104,9 @@ def main() -> None:
 
     repo_root = infer_repo_root_from_this_file()
     out_dir = Path(args.out_dir).resolve() if args.out_dir else (repo_root / "logs")
+    logger = _setup_service_logging(out_dir, verbose=bool(args.verbose))
+    _install_exception_hooks(logger)
+    logger.info("Service runtime logging initialized")
 
     # Map path: accept absolute; else interpret relative to repo_root
     map_path = Path(args.map_path)
@@ -1087,6 +1147,7 @@ def main() -> None:
     try:
         svc.run(poll_s=float(args.poll), verbose=bool(args.verbose))
     except KeyboardInterrupt:
+        logger.info("Service stopping due to KeyboardInterrupt")
         if args.verbose:
             print("[service] stopping (KeyboardInterrupt)")
         svc.stop_evt.set()
@@ -1095,6 +1156,9 @@ def main() -> None:
         except Exception:
             pass
         svc.close()
+    except Exception:
+        logger.exception("Service terminated with unhandled exception")
+        raise
 
 
 if __name__ == "__main__":

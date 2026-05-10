@@ -111,7 +111,8 @@ class TelemetryPanel(StatePanel):
     def __init__(self, parent, logs_dir: Path, debug: bool = False):
         super().__init__(parent, logs_dir, debug=debug)
         self.create_widgets()
-        self.zone_labels = {}
+        self.zone_numeric_labels = {}
+        self.zone_detail_labels = {}
         self.zone_frames = {}
     
     def create_widgets(self):
@@ -149,8 +150,23 @@ class TelemetryPanel(StatePanel):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     
-    def _format_telemetry_zone(self, zone_data: Dict, analysis_data: Dict, zone_config: Dict) -> str:
-        """Format telemetry, analysis, config data for a zone."""
+    def _format_numeric_telemetry(self, zone_data: Dict) -> str:
+        """Format top-of-card numeric telemetry summary."""
+        pv = safe_get(zone_data, "pv_c", default="N/A")
+        sp = safe_get(zone_data, "sp_abs", default="N/A")
+        out = safe_get(zone_data, "out_pct", default="N/A")
+
+        if isinstance(pv, (int, float)):
+            pv = f"{float(pv):.2f} C"
+        if isinstance(sp, (int, float)):
+            sp = f"{float(sp):.2f} C"
+        if isinstance(out, (int, float)):
+            out = f"{float(out):.1f} %"
+
+        return f"PV: {pv}    SP: {sp}\nOutput: {out}"
+
+    def _format_telemetry_zone_details(self, zone_data: Dict, analysis_data: Dict, zone_config: Dict) -> str:
+        """Format non-numeric telemetry/config/analysis details."""
         lines = []
         
         # === SENSOR INFO ===
@@ -167,23 +183,6 @@ class TelemetryPanel(StatePanel):
         
         sensor_status = safe_get(zone_config, "sensor_status", default="N/A")
         lines.append(f"  Type: {sensor_type}  |  Thermocouple: {tc_type_display}  |  Status: {sensor_status}")
-        
-        # === NUMERIC TELEMETRY ===
-        lines.append("")  # Blank line separator
-        lines.append("Numeric Telemetry:")
-        
-        pv = safe_get(zone_data, "pv_c", default="N/A")
-        sp = safe_get(zone_data, "sp_abs", default="N/A")
-        out = safe_get(zone_data, "out_pct", default="N/A")
-        
-        if isinstance(pv, float):
-            pv = f"{pv:.2f}°C"
-        if isinstance(sp, float):
-            sp = f"{sp:.2f}°C"
-        if isinstance(out, float):
-            out = f"{out:.1f}%"
-        
-        lines.append(f"  PV: {pv}  |  SP: {sp}  |  Output: {out}")
         
         # === STATUS TELEMETRY ===
         lines.append("")  # Blank line separator
@@ -319,31 +318,47 @@ class TelemetryPanel(StatePanel):
             self.info_label.config(text=f"Last update: {format_timestamp(display_ts)} | Port: {port}")
             
             if not telemetry or "zones" not in telemetry:
-                for label in self.zone_labels.values():
+                for label in self.zone_numeric_labels.values():
+                    label.config(text="PV: N/A    SP: N/A\nOutput: N/A")
+                for label in self.zone_detail_labels.values():
                     label.config(text="No data available")
                 return
             
             zones_data = telemetry.get("zones", {})
             
             # Clear old labels if needed
-            if set(self.zone_labels.keys()) != set(zones_data.keys()):
+            if set(self.zone_detail_labels.keys()) != set(zones_data.keys()):
                 for widget in self.zones_container.winfo_children():
                     widget.destroy()
-                self.zone_labels.clear()
+                self.zone_numeric_labels.clear()
+                self.zone_detail_labels.clear()
                 self.zone_frames.clear()
             
             # Update or create zone displays
             sorted_zone_ids = sorted(zones_data.keys(), key=lambda x: int(x) if x.isdigit() else 999)
             for idx, zone_id in enumerate(sorted_zone_ids):
                 zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
-                if zone_id not in self.zone_labels:
+                if zone_id not in self.zone_detail_labels:
                     zone_frame = ttk.LabelFrame(self.zones_container, text=zone_display)
                     row = idx // 3
                     col = idx % 3
                     zone_frame.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
-                    label = ttk.Label(zone_frame, text="", justify=tk.LEFT, font=("Courier", 8))
-                    label.pack(padx=10, pady=5)
-                    self.zone_labels[zone_id] = label
+
+                    numeric_label = tk.Label(
+                        zone_frame,
+                        text="",
+                        justify=tk.LEFT,
+                        anchor="w",
+                        fg="red",
+                        font=("Arial", 12, "bold"),
+                    )
+                    numeric_label.pack(fill=tk.X, padx=10, pady=(6, 2))
+
+                    details_label = ttk.Label(zone_frame, text="", justify=tk.LEFT, font=("Courier", 8))
+                    details_label.pack(padx=10, pady=(2, 6), anchor="w")
+
+                    self.zone_numeric_labels[zone_id] = numeric_label
+                    self.zone_detail_labels[zone_id] = details_label
                     self.zone_frames[zone_id] = zone_frame
                 else:
                     self.zone_frames[zone_id].config(text=zone_display)
@@ -353,8 +368,10 @@ class TelemetryPanel(StatePanel):
                 zone_analysis = analysis.get(zone_id, {})
                 zone_config = zones_config.get(zone_id, {})
                 
-                text = self._format_telemetry_zone(zone_data, zone_analysis, zone_config)
-                self.zone_labels[zone_id].config(text=text)
+                numeric_text = self._format_numeric_telemetry(zone_data)
+                details_text = self._format_telemetry_zone_details(zone_data, zone_analysis, zone_config)
+                self.zone_numeric_labels[zone_id].config(text=numeric_text)
+                self.zone_detail_labels[zone_id].config(text=details_text)
         
         except TypeError as e:
             error_msg = f"Type Error - {str(e)}\n{traceback.format_exc()}"

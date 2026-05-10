@@ -10,22 +10,15 @@ set "SERVICE=%REPO_ROOT%\py\cn616a_service.py"
 set "CFG=%REPO_ROOT%\logs\cn616a_service_config_state.json"
 
 if not exist "%PY%" (
-  echo ERROR: Python interpreter not found at "%PY%"
-  echo Run "bat\venv_setup.bat" first.
-  popd >nul
-  exit /b 1
+  call :fail "ERROR: Python interpreter not found at \"%PY%\""
 )
 
 if not exist "%GUI%" (
-  echo ERROR: GUI script not found at "%GUI%"
-  popd >nul
-  exit /b 1
+  call :fail "ERROR: GUI script not found at \"%GUI%\""
 )
 
 if not exist "%SERVICE%" (
-  echo ERROR: Service script not found at "%SERVICE%"
-  popd >nul
-  exit /b 1
+  call :fail "ERROR: Service script not found at \"%SERVICE%\""
 )
 
 if /I "%~1"=="--help" goto run_gui_only
@@ -42,10 +35,7 @@ if defined CN616A_SERVICE_HOST set "SERVICE_HOST=%CN616A_SERVICE_HOST%"
 if defined CN616A_SERVICE_TCP_PORT set "SERVICE_TCP_PORT=%CN616A_SERVICE_TCP_PORT%"
 
 if "%SERVICE_PORT%"=="" (
-  echo ERROR: No serial port configured for service startup.
-  echo Start once with ".\bat\service_start.bat --port COMx" OR set CN616A_SERIAL_PORT.
-  popd >nul
-  exit /b 1
+  call :fail "ERROR: No serial port configured for service startup. Run .\bat\service_start.bat --port COMx once, or set CN616A_SERIAL_PORT."
 )
 
 call :is_service_up
@@ -61,6 +51,12 @@ if errorlevel 1 (
 "%PY%" "%GUI%" %*
 set "RC=%ERRORLEVEL%"
 
+if not "%RC%"=="0" (
+  echo.
+  echo GUI exited with code %RC%.
+  pause
+)
+
 popd >nul
 exit /b %RC%
 
@@ -74,3 +70,10 @@ exit /b 0
 :is_service_up
 "%PY%" -c "import socket,sys; h=sys.argv[1]; p=int(sys.argv[2]); s=socket.socket(); s.settimeout(0.5); ok=(s.connect_ex((h,p))==0); s.close(); sys.exit(0 if ok else 1)" "%SERVICE_HOST%" "%SERVICE_TCP_PORT%"
 exit /b %ERRORLEVEL%
+
+:fail
+echo %~1
+echo.
+pause
+popd >nul
+exit /b 1

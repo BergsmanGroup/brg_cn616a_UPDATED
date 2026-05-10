@@ -143,3 +143,718 @@ Current thread 0x00003b38 (most recent call first):
   File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 392 in main
   File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 399 in <module>
 === GUI fault log session start: 2026-03-06T18:26:31.945664 ===
+=== GUI fault log session start: 2026-03-06T18:46:02.929812 ===
+=== GUI fault log session start: 2026-03-06T19:05:16.927512 ===
+=== GUI fault log session start: 2026-03-06T19:06:29.803385 ===
+=== GUI fault log session start: 2026-03-06T19:08:45.609567 ===
+=== GUI fault log session start: 2026-03-06T19:27:10.181281 ===
+=== GUI fault log session start: 2026-03-07T14:26:14.833136 ===
+=== GUI fault log session start: 2026-03-10T22:29:28.021226 ===
+=== GUI fault log session start: 2026-03-11T14:45:41.078134 ===
+Windows fatal exception: code 0xc0000096
+
+Current thread 0x00005998 (most recent call first):
+  Garbage-collecting
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 266 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 200 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\offsetbox.py", line 212 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\offsetbox.py", line 425 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\legend.py", line 909 in _init_legend_box
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\legend.py", line 550 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_axes.py", line 337 in legend
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1052 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+Windows fatal exception: access violation
+
+Current thread 0x00005998 (most recent call first):
+  Garbage-collecting
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 266 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 200 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\offsetbox.py", line 212 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\offsetbox.py", line 425 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\legend.py", line 909 in _init_legend_box
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\legend.py", line 550 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_axes.py", line 337 in legend
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1052 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+Windows fatal exception: access violation
+
+Current thread 0x00005998 (most recent call first):
+  Garbage-collecting
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 266 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 200 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\offsetbox.py", line 212 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\offsetbox.py", line 425 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\legend.py", line 909 in _init_legend_box
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\legend.py", line 550 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_axes.py", line 337 in legend
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1052 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-13T17:47:56.878778 ===
+=== GUI fault log session start: 2026-03-13T17:56:29.991225 ===
+=== GUI fault log session start: 2026-03-16T08:57:17.660498 ===
+=== GUI fault log session start: 2026-03-16T13:52:54.620830 ===
+Windows fatal exception: access violation
+
+Current thread 0x000050a4 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 109 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-16T13:54:13.392975 ===
+Windows fatal exception: access violation
+
+Current thread 0x000052b0 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 317 in _extract_analysis_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 352 in load_analysis_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1205 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-23T12:38:07.126772 ===
+Windows fatal exception: access violation
+
+Current thread 0x00001498 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 916 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-23T12:48:32.504356 ===
+Windows fatal exception: access violation
+
+Current thread 0x000027f8 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 325 in stale
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\figure.py", line 67 in _stale_figure_callback
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 326 in stale
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 104 in _stale_axes_callback
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 326 in stale
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 475 in update_position
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1285 in _update_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1404 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134 in _draw_list_compositing_images
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 3226 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134 in _draw_list_compositing_images
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\figure.py", line 3257 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 94 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_agg.py", line 382 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_tkagg.py", line 10 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\_backend_tk.py", line 302 in idle_draw
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-23T12:57:17.518060 ===
+Windows fatal exception: access violation
+
+Current thread 0x00003a0c (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 358 in process
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 425 in pchanged
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 843 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 236 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1118 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 904 in reset_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 881 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1330 in __clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1452 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1461 in cla
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 882 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-23T13:02:11.981173 ===
+Windows fatal exception: access violation
+
+Current thread 0x00004284 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 121 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+Windows fatal exception: access violation
+
+Current thread 0x00004284 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 121 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+Windows fatal exception: access violation
+
+Current thread 0x00004284 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 121 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-23T13:02:21.045123 ===
+Windows fatal exception: access violation
+
+Current thread 0x0000228c (most recent call first):
+  File Windows fatal exception: access violation
+
+=== GUI fault log session start: 2026-03-23T13:08:19.569285 ===
+Windows fatal exception: access violation
+
+Current thread 0x00002df4 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 110 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-23T14:18:13.415660 ===
+=== GUI fault log session start: 2026-03-24T12:20:23.223254 ===
+=== GUI fault log session start: 2026-03-24T12:33:49.213676 ===
+=== GUI fault log session start: 2026-03-24T12:42:12.018259 ===
+=== GUI fault log session start: 2026-03-24T12:52:26.610294 ===
+=== GUI fault log session start: 2026-03-24T15:03:33.790544 ===
+=== GUI fault log session start: 2026-03-24T15:17:32.444898 ===
+=== GUI fault log session start: 2026-03-24T15:28:25.629581 ===
+=== GUI fault log session start: 2026-03-24T15:40:59.309212 ===
+=== GUI fault log session start: 2026-03-24T15:57:34.093548 ===
+=== GUI fault log session start: 2026-03-24T16:07:22.063501 ===
+Windows fatal exception: access violation
+
+Current thread 0x00005320 (most recent call first):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 354 in raw_decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 338 in decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 346 in loads
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 267 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-24T16:10:41.157750 ===
+Windows fatal exception: access violation
+
+Current thread 0x00005454 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 118 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-24T16:24:48.589520 ===
+=== GUI fault log session start: 2026-03-24T16:28:51.614620 ===
+Windows fatal exception: access violation
+
+Current thread 0x00002a48 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\patches.py", line 819 in get_patch_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\patches.py", line 309 in get_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 815 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 237 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1118 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1420 in __clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1452 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1461 in cla
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 881 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-24T16:34:14.886824 ===
+Windows fatal exception: access violation
+
+Current thread 0x00000538 (most recent call first):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 354 in raw_decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 338 in decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 346 in loads
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 267 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-24T16:52:59.730897 ===
+Windows fatal exception: access violation
+
+Current thread 0x00003b1c (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 109 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-24T16:57:13.872867 ===
+Windows fatal exception: access violation
+
+Current thread 0x00003528 (most recent call first):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 354 in raw_decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 338 in decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 346 in loads
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 267 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-24T16:58:11.246152 ===
+Windows fatal exception: access violation
+
+Current thread 0x000032b0 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 1792 in normalize_kwargs
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 1241 in set
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 146 in <lambda>
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 343 in _apply_params
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 976 in set_tick_params
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 3553 in tick_params
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1044 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-24T18:05:55.286995 ===
+=== GUI fault log session start: 2026-03-25T13:55:08.978794 ===
+Windows fatal exception: access violation
+
+Current thread 0x000037e4 (most recent call first):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\copy.py", line 134 in deepcopy
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\copy.py", line 221 in _deepcopy_dict
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\copy.py", line 136 in deepcopy
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\markers.py", line 323 in _set_marker
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\markers.py", line 248 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\lines.py", line 1372 in update_from
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1612 in _copy_tick_props
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1666 in get_major_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1283 in _update_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1404 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134 in _draw_list_compositing_images
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 3226 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134 in _draw_list_compositing_images
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\figure.py", line 3257 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 94 in draw_wrapper
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_agg.py", line 382 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_tkagg.py", line 10 in draw
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\_backend_tk.py", line 302 in idle_draw
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T13:58:48.800446 ===
+Windows fatal exception: access violation
+
+Current thread 0x00001934 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\transforms.py", line 786 in unit
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 814 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1116 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1420 in __clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1452 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1461 in cla
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 881 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T14:05:04.785786 ===
+=== GUI fault log session start: 2026-03-25T14:17:15.456564 ===
+=== GUI fault log session start: 2026-03-25T14:24:56.238775 ===
+=== GUI fault log session start: 2026-03-25T14:42:34.783448 ===
+=== GUI fault log session start: 2026-03-25T16:40:33.038707 ===
+Windows fatal exception: access violation
+
+Current thread 0x00002e88 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 259 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 352 in load_analysis_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1205 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T17:05:10.399554 ===
+Windows fatal exception: access violation
+
+Current thread 0x000028e4 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\dates.py", line 449 in date2num
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\dates.py", line 1762 in convert
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\dates.py", line 1834 in convert
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1811 in convert_units
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 278 in convert_xunits
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\lines.py", line 688 in recache
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\lines.py", line 1052 in get_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 2440 in _update_line_limits
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 2417 in add_line
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_axes.py", line 1779 in plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 921 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T17:17:51.759220 ===
+Windows fatal exception: access violation
+
+Current thread 0x00003678 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 109 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T17:41:08.497922 ===
+Windows fatal exception: access violation
+
+Current thread 0x00000954 (most recent call first):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 354 in raw_decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 338 in decode
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 346 in loads
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 267 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T17:41:23.033235 ===
+=== GUI fault log session start: 2026-03-25T18:09:50.005958 ===
+Windows fatal exception: access violation
+
+Current thread 0x00004640 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 271 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T18:11:52.819373 ===
+=== GUI fault log session start: 2026-03-25T18:20:02.726569 ===
+=== GUI fault log session start: 2026-03-25T18:30:50.276497 ===
+=== GUI fault log session start: 2026-03-25T18:44:13.905510 ===
+Windows fatal exception: access violation
+
+Current thread 0x00003104 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 1792 in normalize_kwargs
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\text.py", line 197 in update
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\text.py", line 155 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 172 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 368 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1592 in _get_tick
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 552 in __get__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1117 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 904 in reset_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 338 in set_position
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 207 in _ensure_position_is_set
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 348 in get_spine_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 988 in get_xaxis_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 374 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1592 in _get_tick
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 547 in __get__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1117 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 904 in reset_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 338 in set_position
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 207 in _ensure_position_is_set
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 348 in get_spine_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 985 in get_xaxis_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 372 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1592 in _get_tick
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 547 in __get__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1117 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 904 in reset_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 881 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1330 in __clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1452 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1461 in cla
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 882 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T18:47:33.765904 ===
+Windows fatal exception: access violation
+
+Current thread 0x000037d4 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 1791 in normalize_kwargs
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 1241 in set
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 146 in <lambda>
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 379 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1592 in _get_tick
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 547 in __get__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1117 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 904 in reset_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 338 in set_position
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 207 in _ensure_position_is_set
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\spines.py", line 348 in get_spine_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 985 in get_xaxis_transform
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 372 in __init__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1592 in _get_tick
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 547 in __get__
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1117 in set_clip_path
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 904 in reset_ticks
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 881 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1330 in __clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1452 in clear
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 1461 in cla
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 882 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T18:54:05.959701 ===
+Windows fatal exception: access violation
+
+Current thread 0x00000cb4 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 109 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 414 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1200 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T18:59:47.460882 ===
+=== GUI fault log session start: 2026-03-25T19:09:42.610020 ===
+Windows fatal exception: access violation
+
+Current thread 0x00003138 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 917 in _update_plot
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 739 in set_zone_data
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1220 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1190 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-25T19:31:20.285495 ===
+=== GUI fault log session start: 2026-03-26T10:07:36.068435 ===
+=== GUI fault log session start: 2026-03-26T10:13:52.322022 ===
+=== GUI fault log session start: 2026-03-26T10:22:38.960536 ===
+Windows fatal exception: access violation
+
+Current thread 0x000039c0 (most recent call first):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 110 in _extract_zone_values
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 338 in _scan_windowed_log_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 470 in load_telemetry_points
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1260 in refresh
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 1250 in _refresh_tick
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862 in callit
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968 in __call__
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 362 in run
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 407 in main
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 414 in <module>
+=== GUI fault log session start: 2026-03-26T10:43:19.819390 ===
+=== GUI fault log session start: 2026-03-26T10:46:22.740924 ===
+=== GUI fault log session start: 2026-03-26T10:47:12.024721 ===
+=== GUI fault log session start: 2026-03-26T11:13:10.597328 ===
+=== GUI fault log session start: 2026-03-26T11:26:43.039797 ===
+=== GUI fault log session start: 2026-03-26T15:36:22.440940 ===
+=== GUI fault log session start: 2026-03-26T15:51:06.340271 ===
+=== GUI fault log session start: 2026-03-26T16:21:47.598507 ===
+=== GUI fault log session start: 2026-03-26T21:02:13.189880 ===
+=== GUI fault log session start: 2026-04-01T13:28:04.936280 ===
+=== GUI fault log session start: 2026-04-01T15:26:10.343212 ===
+=== GUI fault log session start: 2026-04-07T10:36:03.282934 ===
+=== GUI fault log session start: 2026-04-07T10:55:31.491854 ===
+=== GUI fault log session start: 2026-04-07T11:14:37.413689 ===
+=== GUI fault log session start: 2026-04-07T11:53:03.638052 ===
+=== GUI fault log session start: 2026-04-07T12:32:56.961522 ===
+=== GUI fault log session start: 2026-04-07T13:12:24.699012 ===
+=== GUI fault log session start: 2026-04-07T16:47:27.198866 ===
+=== GUI fault log session start: 2026-04-07T17:10:11.441573 ===
+=== GUI fault log session start: 2026-04-07T17:35:43.573428 ===
+=== GUI fault log session start: 2026-04-07T18:11:06.764963 ===
+=== GUI fault log session start: 2026-04-07T18:38:26.981313 ===
+=== GUI fault log session start: 2026-04-07T19:19:55.709026 ===
+=== GUI fault log session start: 2026-04-07T21:38:51.738870 ===
+=== GUI fault log session start: 2026-04-07T21:54:40.870549 ===
+=== GUI fault log session start: 2026-04-08T06:10:57.245898 ===
+=== GUI fault log session start: 2026-04-08T10:12:02.898464 ===
+=== GUI fault log session start: 2026-04-08T10:22:36.476968 ===
+=== GUI fault log session start: 2026-04-09T08:34:41.360751 ===
+=== GUI fault log session start: 2026-04-09T09:03:03.297715 ===
+=== GUI fault log session start: 2026-04-09T10:20:44.096933 ===
+=== GUI fault log session start: 2026-04-09T10:40:59.118080 ===
+=== GUI fault log session start: 2026-04-09T16:59:59.773431 ===
+=== GUI fault log session start: 2026-04-09T22:15:41.092504 ===
+=== GUI fault log session start: 2026-04-10T09:14:45.040236 ===
+=== GUI fault log session start: 2026-04-10T14:20:08.664439 ===
+=== GUI fault log session start: 2026-04-10T14:32:55.038249 ===
+=== GUI fault log session start: 2026-04-10T14:56:57.341341 ===
+=== GUI fault log session start: 2026-04-10T15:15:53.143013 ===
+=== GUI fault log session start: 2026-04-10T15:33:03.687416 ===
+=== GUI fault log session start: 2026-04-10T15:40:16.941585 ===
+=== GUI fault log session start: 2026-04-10T16:49:53.625776 ===
+=== GUI fault log session start: 2026-04-10T16:51:29.894091 ===
+=== GUI fault log session start: 2026-04-10T23:43:54.464910 ===
+=== GUI fault log session start: 2026-04-13T10:31:23.634322 ===
+=== GUI fault log session start: 2026-04-13T14:50:35.733013 ===
+=== GUI fault log session start: 2026-04-13T15:00:56.524247 ===
+=== GUI fault log session start: 2026-04-13T16:00:04.496996 ===
+=== GUI fault log session start: 2026-04-13T18:40:57.473608 ===
+=== GUI fault log session start: 2026-04-14T10:27:42.609505 ===
+=== GUI fault log session start: 2026-04-14T14:18:42.633934 ===
+=== GUI fault log session start: 2026-04-14T14:29:35.832760 ===
+=== GUI fault log session start: 2026-04-14T15:07:17.926792 ===
+=== GUI fault log session start: 2026-04-14T16:02:17.295504 ===
+=== GUI fault log session start: 2026-04-15T11:05:30.965874 ===
+=== GUI fault log session start: 2026-04-15T13:48:20.222523 ===
+=== GUI fault log session start: 2026-04-15T15:53:15.674369 ===
+=== GUI fault log session start: 2026-04-16T14:07:38.951209 ===
+=== GUI fault log session start: 2026-04-22T15:39:56.587516 ===
+=== GUI fault log session start: 2026-04-23T10:49:03.221624 ===
+=== GUI fault log session start: 2026-04-24T12:42:59.041234 ===
+=== GUI fault log session start: 2026-04-25T13:44:49.095637 ===
+=== GUI fault log session start: 2026-04-27T09:25:02.328847 ===
+=== GUI fault log session start: 2026-04-27T09:41:05.751616 ===
+=== GUI fault log session start: 2026-04-27T09:41:45.208973 ===
+=== GUI fault log session start: 2026-05-02T09:08:50.442320 ===
+=== GUI fault log session start: 2026-05-04T10:47:00.467357 ===
+=== GUI fault log session start: 2026-05-04T10:54:41.640630 ===
+=== GUI fault log session start: 2026-05-04T11:12:44.921562 ===
+=== GUI fault log session start: 2026-05-05T17:12:30.885069 ===
+=== GUI fault log session start: 2026-05-06T17:54:05.390319 ===
+=== GUI fault log session start: 2026-05-06T18:03:40.585243 ===
+=== GUI fault log session start: 2026-05-08T15:58:08.320723 ===
+=== GUI fault log session start: 2026-05-10T07:48:37.381767 ===

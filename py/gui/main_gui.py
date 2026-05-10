@@ -61,9 +61,11 @@ try:
         if str(py_root) not in sys.path:
             sys.path.insert(0, str(py_root))
         from gui.display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
+        from gui.command_panel import CommandPanel
         from gui.state_reader import get_service_config_state
     else:
         from .display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
+        from .command_panel import CommandPanel
         from .state_reader import get_service_config_state
 except Exception:
     _setup_bootstrap_logging(_default_logs_dir()).exception("Failed to import GUI modules")
@@ -93,6 +95,7 @@ class CN616AGUI:
         self.root.geometry("900x700")
         
         self.chart_panel = None  # lazy-loaded
+        self.command_panel = None
         self.chart_panel_initialized = False
         self.chart_available = False
         self.chart_disabled_reason = self._chart_disabled_reason()
@@ -165,17 +168,26 @@ class CN616AGUI:
         title_frame = ttk.Frame(self.root)
         title_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(title_frame, text="CN616A Controller Display (Read-Only)", 
+        ttk.Label(title_frame, text="CN616A Controller Display (Read + Command)", 
                  font=("Arial", 16, "bold")).pack(side=tk.LEFT)
-        ttk.Label(title_frame, text="Phase 1", foreground="blue").pack(side=tk.LEFT, padx=10)
+        ttk.Label(title_frame, text="Phase 2", foreground="blue").pack(side=tk.LEFT, padx=10)
         
         # Notebook
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Telemetry tab
-        telemetry_panel = TelemetryPanel(notebook, self.logs_dir, debug=self.debug)
-        notebook.add(telemetry_panel, text="Telemetry")
+        # Telemetry tab: read-only display panel + separate command panel module.
+        telemetry_tab = ttk.Frame(notebook)
+        notebook.add(telemetry_tab, text="Telemetry")
+
+        command_panel = CommandPanel(telemetry_tab, self.logs_dir, debug=self.debug)
+        command_panel.pack(fill=tk.X, expand=False)
+        self.command_panel = command_panel
+
+        telemetry_panel = TelemetryPanel(telemetry_tab, self.logs_dir, debug=self.debug)
+        telemetry_panel.pack(fill=tk.BOTH, expand=True)
+
+        self.panels.append(command_panel)
         self.panels.append(telemetry_panel)
         
         # Config tab
@@ -243,15 +255,18 @@ class CN616AGUI:
     
     def _on_notebook_tab_changed(self, event):
         """Lazy-load chart panel when Chart tab is selected."""
+        # Check which tab is now active
+        selected_tab = event.widget.select()
+        tab_text = event.widget.tab(selected_tab, "text")
+
+        if tab_text == "Telemetry" and self.command_panel is not None:
+            self.command_panel.on_tab_selected()
+
         if not self.chart_available:
             return
         if self.chart_panel_initialized:
             return  # Already loaded
-        
-        # Check which tab is now active
-        selected_tab = event.widget.select()
-        tab_text = event.widget.tab(selected_tab, "text")
-        
+
         if tab_text == "Chart":
             self._initialize_chart_panel()
             self.chart_panel_initialized = True

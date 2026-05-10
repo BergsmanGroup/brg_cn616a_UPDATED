@@ -71,3 +71,271 @@ KeyError: 3
 2026-03-06 18:17:16,641 INFO [cn616a.gui] GUI runtime logging initialized
 2026-03-06 18:22:46,969 INFO [cn616a.gui] GUI runtime logging initialized
 2026-03-06 18:26:31,945 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 18:46:02,929 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 19:05:16,928 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 19:06:29,803 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 19:08:45,609 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-06 19:27:10,182 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-07 14:26:14,833 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-10 22:29:28,021 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-11 14:45:41,078 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-13 17:47:56,878 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-13 17:56:29,992 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-16 08:57:17,660 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-16 13:52:54,620 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-16 13:54:13,392 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-23 12:38:07,127 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-23 12:48:32,504 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-23 12:54:34,474 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 267, in _scan_windowed_log_points
+    obj = json.loads(line)
+          ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 354, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+ValueError: invalid literal for int() with base 10: '8'
+2026-03-23 12:57:17,518 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-23 13:02:11,981 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-23 13:02:21,045 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-23 13:08:19,569 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-23 14:18:13,415 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 12:20:23,223 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 12:33:49,213 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 12:42:12,018 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 12:52:26,610 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 15:03:33,790 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 15:17:32,444 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 15:28:25,629 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 15:30:10,743 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 267, in _scan_windowed_log_points
+    obj = json.loads(line)
+          ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\json\decoder.py", line 354, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+ValueError: invalid literal for int() with base 10: '6'
+2026-03-24 15:40:59,309 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 15:57:34,093 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:07:22,063 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:08:46,773 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282, in _scan_windowed_log_points
+    total_points += extract_fn(obj, ts, out_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 118, in _extract_zone_values
+    zones_data[zone_id]["times"].append(ts)
+    ~~~~~~~~~~^^^^^^^^^
+KeyError: 5
+2026-03-24 16:10:41,158 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:24:48,589 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:28:51,614 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:34:14,886 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:52:59,730 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:57:13,873 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 16:58:11,246 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 18:05:55,286 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-24 18:09:45,054 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282, in _scan_windowed_log_points
+    total_points += extract_fn(obj, ts, out_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 118, in _extract_zone_values
+    zones_data[zone_id]["times"].append(ts)
+    ~~~~~~~~~~^^^^^^^^^
+KeyError: 5
+2026-03-25 13:55:08,978 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 13:58:48,800 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 14:05:04,785 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 14:17:15,458 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 14:22:33,457 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282, in _scan_windowed_log_points
+    total_points += extract_fn(obj, ts, out_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 110, in _extract_zone_values
+    zone_id = int(zone_id_str)
+              ^^^^^^^^^^^^^^^^
+ValueError: invalid literal for int() with base 10: '1'
+2026-03-25 14:24:56,238 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 14:42:34,783 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 16:40:33,038 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 16:51:13,746 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282, in _scan_windowed_log_points
+    total_points += extract_fn(obj, ts, out_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 118, in _extract_zone_values
+    zones_data[zone_id]["times"].append(ts)
+    ~~~~~~~~~~^^^^^^^^^
+KeyError: 3
+2026-03-25 17:05:10,399 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 17:05:34,455 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 862, in callit
+    func(*args)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\_backend_tk.py", line 302, in idle_draw
+    self.draw()
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_tkagg.py", line 10, in draw
+    super().draw()
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\backends\backend_agg.py", line 382, in draw
+    self.figure.draw(self.renderer)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 94, in draw_wrapper
+    result = draw(artist, renderer, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71, in draw_wrapper
+    return draw(artist, renderer)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\figure.py", line 3257, in draw
+    mimage._draw_list_compositing_images(
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134, in _draw_list_compositing_images
+    a.draw(renderer)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71, in draw_wrapper
+    return draw(artist, renderer)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axes\_base.py", line 3226, in draw
+    mimage._draw_list_compositing_images(
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\image.py", line 134, in _draw_list_compositing_images
+    a.draw(renderer)
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 71, in draw_wrapper
+    return draw(artist, renderer)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1404, in draw
+    ticks_to_draw = self._update_ticks()
+                    ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1283, in _update_ticks
+    major_ticks = self.get_major_ticks(len(major_locs))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1664, in get_major_ticks
+    tick = self._get_tick(major=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 1592, in _get_tick
+    return self._tick_class(self.axes, 0, major=major, **tick_kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\axis.py", line 384, in __init__
+    self.label2.set(
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 146, in <lambda>
+    cls.set = lambda self, **kwargs: Artist.set(self, **kwargs)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\artist.py", line 1241, in set
+    return self._internal_update(cbook.normalize_kwargs(kwargs, self))
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\.venv\Lib\site-packages\matplotlib\cbook.py", line 1792, in normalize_kwargs
+    for canonical, alias_list in alias_mapping.items()
+                                 ^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'dict_itemiterator' object cannot be interpreted as an integer
+2026-03-25 17:17:51,759 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 17:41:08,497 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 17:41:23,033 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:05:12,673 ERROR [cn616a.gui] load_telemetry_points failed reading C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 282, in _scan_windowed_log_points
+    total_points += extract_fn(obj, ts, out_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 118, in _extract_zone_values
+    zones_data[zone_id]["times"].append(ts)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'dict' object has no attribute 'append'
+2026-03-25 18:09:50,005 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:11:52,819 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:20:02,726 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:30:50,276 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:44:13,905 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:47:33,765 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:54:05,959 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 18:59:47,460 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 19:09:42,610 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-25 19:31:20,285 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 10:07:36,069 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 10:13:52,322 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 10:22:38,960 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 10:43:19,824 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 10:46:22,740 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 10:47:12,024 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 11:13:10,597 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 11:26:43,039 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 15:36:22,441 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 15:51:06,340 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 16:21:47,598 INFO [cn616a.gui] GUI runtime logging initialized
+2026-03-26 21:02:13,189 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-01 13:28:04,936 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-01 15:26:10,343 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 10:36:03,282 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 10:55:31,500 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 11:14:37,413 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 11:53:03,638 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 12:32:56,961 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 13:12:24,699 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 16:47:27,198 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 17:10:11,441 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 17:35:43,573 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 18:11:06,764 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 18:38:26,981 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 19:19:55,709 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 21:38:51,738 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-07 21:54:40,870 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-08 06:10:57,245 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-08 10:12:02,898 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-08 10:22:36,476 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-09 08:34:41,360 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-09 09:03:03,297 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-09 10:20:44,096 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-09 10:40:59,118 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-09 16:59:59,773 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-09 22:15:41,093 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 09:14:45,040 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 14:20:08,664 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 14:32:55,038 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 14:56:57,341 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 15:15:53,143 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 15:33:03,687 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 15:40:16,941 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 16:49:53,625 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 16:51:29,894 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-10 23:43:54,464 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-13 10:31:23,634 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-13 14:50:35,733 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-13 15:00:56,524 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-13 16:00:04,496 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-13 18:40:57,473 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-14 10:27:42,609 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-14 14:18:42,633 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-14 14:29:35,832 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-14 15:07:17,926 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-14 16:02:17,295 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-15 11:05:30,965 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-15 13:48:20,222 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-15 15:53:15,674 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-16 14:07:38,952 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-22 15:39:56,588 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-23 10:49:03,221 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-24 12:42:59,041 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-25 13:44:49,095 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-27 09:25:02,329 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-27 09:41:05,751 INFO [cn616a.gui] GUI runtime logging initialized
+2026-04-27 09:41:45,209 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-02 09:08:50,442 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-04 10:47:00,467 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-04 10:54:41,640 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-04 11:12:44,921 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-05 17:12:30,885 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-06 17:54:05,390 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-06 18:03:40,585 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-08 15:58:08,320 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-10 07:48:37,381 INFO [cn616a.gui] GUI runtime logging initialized
