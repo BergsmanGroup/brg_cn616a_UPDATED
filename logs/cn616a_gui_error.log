@@ -339,3 +339,84 @@ AttributeError: 'dict' object has no attribute 'append'
 2026-05-06 18:03:40,585 INFO [cn616a.gui] GUI runtime logging initialized
 2026-05-08 15:58:08,320 INFO [cn616a.gui] GUI runtime logging initialized
 2026-05-10 07:48:37,381 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-10 13:33:06,272 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-10 13:33:28,279 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-10 14:03:33,282 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-11 10:06:34,217 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-11 11:37:35,235 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-11 15:32:59,784 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-11 15:46:28,655 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-11 16:08:20,936 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-11 21:12:02,384 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-11 21:20:56,851 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-12 08:43:27,797 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-12 10:15:00,722 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-12 13:47:54,498 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-13 12:14:38,157 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-26 10:41:59,975 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-26 11:22:12,919 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-26 11:27:48,974 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-26 15:46:56,032 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-26 16:03:42,267 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-28 06:21:40,082 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-28 06:46:46,291 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-28 07:46:04,670 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-29 14:17:41,358 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-29 14:27:01,205 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-29 16:14:52,538 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-29 16:22:27,384 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-30 11:08:17,210 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-30 16:48:07,324 INFO [cn616a.gui] GUI runtime logging initialized
+2026-05-31 10:41:42,017 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-01 11:51:34,458 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-01 19:49:45,443 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-02 09:52:33,773 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-08 16:00:37,362 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-09 14:18:29,286 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-12 14:49:01,904 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-12 15:17:00,428 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-12 15:43:42,659 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-13 11:46:37,484 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-13 12:31:16,779 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-13 12:49:11,770 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-13 18:33:14,284 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-14 10:42:11,765 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-15 10:18:48,616 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-15 10:40:18,363 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-15 10:52:00,118 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-16 10:27:20,923 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-29 10:46:24,452 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-29 11:12:52,358 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-29 13:03:23,165 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-30 10:30:16,541 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-30 10:49:25,225 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-30 11:15:15,206 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-30 12:23:44,339 INFO [cn616a.gui] GUI runtime logging initialized
+2026-06-30 12:31:49,045 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-02 14:24:09,516 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-02 14:42:36,346 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-02 15:14:28,913 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-02 15:14:31,956 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-03 11:19:07,105 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-22 13:56:39,549 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-22 15:08:51,215 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-22 15:27:37,911 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-27 14:06:13,417 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-28 16:22:02,091 INFO [cn616a.gui] GUI runtime logging initialized
+2026-07-28 16:26:47,854 INFO [cn616a.gui] GUI runtime logging initialized
+2026-08-03 10:45:39,971 INFO [cn616a.gui] GUI runtime logging initialized
+2026-08-03 13:45:35,104 INFO [cn616a.gui] GUI runtime logging initialized
+2026-08-03 14:12:05,914 INFO [cn616a.gui] GUI runtime logging initialized
+2026-08-03 23:46:54,761 ERROR [cn616a.gui] Failed reading latest timestamp from C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\logs\cn616a_telemetry_log.jsonl
+Traceback (most recent call last):
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 132, in _get_latest_timestamp
+    for line in _iter_lines_reverse(log_file):
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Documents\GitHub\brg_cn616a_UPDATED\py\gui\chart_panel.py", line 80, in _iter_lines_reverse
+    with open(file_path, "rb") as f:
+         ^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: 'C:\\Users\\Owner\\Documents\\GitHub\\brg_cn616a_UPDATED\\logs\\cn616a_telemetry_log.jsonl'
+2026-08-04 15:53:55,359 INFO [cn616a.gui] GUI runtime logging initialized
+2026-08-04 18:16:31,512 INFO [cn616a.gui] GUI runtime logging initialized
+2026-08-05 06:52:07,853 INFO [cn616a.gui] GUI runtime logging initialized
+2026-08-05 18:03:04,103 INFO [cn616a.gui] GUI runtime logging initialized

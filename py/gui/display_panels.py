@@ -545,9 +545,43 @@ class ConfigPanel(StatePanel):
         )
         flush_check.grid(row=len(polling_rows), column=1, sticky="w", padx=(0, 8), pady=(3, 8))
 
+        # ---- Log rotation section ----
+        rotation_box = ttk.LabelFrame(self.service_form_frame, text="Log Rotation")
+        rotation_box.grid(row=2, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
+        rotation_box.columnconfigure(1, weight=1)
+        rotation_box.columnconfigure(3, weight=1)
+
+        self.max_service_config_log_bytes = ttk.Entry(rotation_box, width=18)
+        self.max_service_config_log_files = ttk.Entry(rotation_box, width=18)
+        self.max_telemetry_log_bytes = ttk.Entry(rotation_box, width=18)
+        self.max_telemetry_log_files = ttk.Entry(rotation_box, width=18)
+        self.max_config_log_bytes = ttk.Entry(rotation_box, width=18)
+        self.max_config_log_files = ttk.Entry(rotation_box, width=18)
+        self.max_rampsoak_log_bytes = ttk.Entry(rotation_box, width=18)
+        self.max_rampsoak_log_files = ttk.Entry(rotation_box, width=18)
+        self.max_analysis_log_bytes = ttk.Entry(rotation_box, width=18)
+        self.max_analysis_log_files = ttk.Entry(rotation_box, width=18)
+
+        rotation_rows = [
+            ("Service config max bytes", self.max_service_config_log_bytes, "Service config max files", self.max_service_config_log_files),
+            ("Telemetry max bytes", self.max_telemetry_log_bytes, "Telemetry max files", self.max_telemetry_log_files),
+            ("Config max bytes", self.max_config_log_bytes, "Config max files", self.max_config_log_files),
+            ("Ramp/Soak max bytes", self.max_rampsoak_log_bytes, "Ramp/Soak max files", self.max_rampsoak_log_files),
+            ("Analysis max bytes", self.max_analysis_log_bytes, "Analysis max files", self.max_analysis_log_files),
+        ]
+        for row, (label_a, widget_a, label_b, widget_b) in enumerate(rotation_rows):
+            ttk.Label(rotation_box, text=label_a + ":").grid(row=row, column=0, sticky="e", padx=(8, 8), pady=3)
+            widget_a.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=3)
+            ttk.Label(rotation_box, text=label_b + ":").grid(row=row, column=2, sticky="e", padx=(8, 8), pady=3)
+            widget_b.grid(row=row, column=3, sticky="ew", padx=(0, 8), pady=3)
+            widget_a.bind("<KeyRelease>", self._on_form_edited)
+            widget_a.bind("<FocusOut>", self._on_form_edited)
+            widget_b.bind("<KeyRelease>", self._on_form_edited)
+            widget_b.bind("<FocusOut>", self._on_form_edited)
+
         # ---- Zones section ----
         zones_box = ttk.LabelFrame(self.service_form_frame, text="Zones")
-        zones_box.grid(row=2, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
+        zones_box.grid(row=3, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
         zones_box.columnconfigure(1, weight=1)
         zones_box.columnconfigure(3, weight=1)
 
@@ -716,6 +750,17 @@ class ConfigPanel(StatePanel):
             self._set_entry_text(self.polling_eq_threshold, cfg.get("equilibrium_threshold_c", 0.25))
             self.flush_each_line_var.set(bool(cfg.get("flush_each_line", False)))
 
+            self._set_entry_text(self.max_service_config_log_bytes, cfg.get("max_service_config_log_bytes", 2_000_000))
+            self._set_entry_text(self.max_service_config_log_files, cfg.get("max_service_config_log_files", 10))
+            self._set_entry_text(self.max_telemetry_log_bytes, cfg.get("max_telemetry_log_bytes", 10_000_000))
+            self._set_entry_text(self.max_telemetry_log_files, cfg.get("max_telemetry_log_files", 10))
+            self._set_entry_text(self.max_config_log_bytes, cfg.get("max_config_log_bytes", 5_000_000))
+            self._set_entry_text(self.max_config_log_files, cfg.get("max_config_log_files", 10))
+            self._set_entry_text(self.max_rampsoak_log_bytes, cfg.get("max_rampsoak_log_bytes", 5_000_000))
+            self._set_entry_text(self.max_rampsoak_log_files, cfg.get("max_rampsoak_log_files", 10))
+            self._set_entry_text(self.max_analysis_log_bytes, cfg.get("max_analysis_log_bytes", 10_000_000))
+            self._set_entry_text(self.max_analysis_log_files, cfg.get("max_analysis_log_files", 10))
+
             zones_mode = str(cfg.get("zones_mode", "auto") or "auto")
             self.zones_mode_var.set("list" if zones_mode == "list" else "auto")
             zones_list = cfg.get("zones_list", [1, 2, 3, 4, 5, 6])
@@ -854,6 +899,31 @@ class ConfigPanel(StatePanel):
         patch["flush_each_line"] = bool(self.flush_each_line_var.get())
         return patch
 
+    def _build_log_rotation_patch(self) -> Dict[str, Any]:
+        patch: Dict[str, Any] = {}
+        pairs = [
+            ("max_service_config_log_bytes", self.max_service_config_log_bytes.get()),
+            ("max_service_config_log_files", self.max_service_config_log_files.get()),
+            ("max_telemetry_log_bytes", self.max_telemetry_log_bytes.get()),
+            ("max_telemetry_log_files", self.max_telemetry_log_files.get()),
+            ("max_config_log_bytes", self.max_config_log_bytes.get()),
+            ("max_config_log_files", self.max_config_log_files.get()),
+            ("max_rampsoak_log_bytes", self.max_rampsoak_log_bytes.get()),
+            ("max_rampsoak_log_files", self.max_rampsoak_log_files.get()),
+            ("max_analysis_log_bytes", self.max_analysis_log_bytes.get()),
+            ("max_analysis_log_files", self.max_analysis_log_files.get()),
+        ]
+        for key, value in pairs:
+            if key.endswith("_files"):
+                num = self._safe_int(value)
+                if num is not None:
+                    patch[key] = max(1, num)
+            else:
+                num = self._safe_int(value)
+                if num is not None:
+                    patch[key] = max(1, num)
+        return patch
+
     def _build_zones_patch(self) -> Dict[str, Any]:
         zone_names = {}
         for z in range(1, 7):
@@ -931,6 +1001,7 @@ class ConfigPanel(StatePanel):
     def _on_apply_settings_clicked(self):
         combined_patch = {}
         combined_patch.update(self._build_polling_patch())
+        combined_patch.update(self._build_log_rotation_patch())
         combined_patch.update(self._build_zones_patch())
         combined_patch.update(self._build_viewer_patch())
         if not combined_patch:

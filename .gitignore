@@ -11,3 +11,6 @@
 logs/cn616a_gui_fault.log
 logs/cn616a_gui_error.log
 py/recipe_table_to_json.py
+logs/cn616a_gui_error.log
+logs/cn616a_gui_fault.log
+logs/cn616a_gui_error.log

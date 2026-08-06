@@ -13,6 +13,7 @@ if str(PY_DIR) not in sys.path:
 from cn616a_service import (  # noqa: E402
     ServiceConfig,
     append_jsonl,
+    append_jsonl_rotated,
     atomic_write_json,
     hz_to_period_s,
     load_persisted_service_config,
@@ -49,6 +50,24 @@ class ServiceUtilsTests(unittest.TestCase):
             self.assertEqual(json.loads(lines[0]), {"a": 1})
             self.assertEqual(json.loads(lines[1]), {"b": 2})
 
+    def test_append_jsonl_rotated_rotates_at_size_threshold(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            jsonl_path = out / "telemetry.jsonl"
+
+            append_jsonl_rotated(jsonl_path, {"seq": 1, "payload": "abc"}, max_bytes=80, max_files=3)
+            append_jsonl_rotated(jsonl_path, {"seq": 2, "payload": "x" * 120}, max_bytes=80, max_files=3)
+
+            active_lines = jsonl_path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(active_lines), 1)
+            self.assertEqual(json.loads(active_lines[0])["seq"], 2)
+
+            rotated = sorted(out.glob("telemetry_*.jsonl"))
+            self.assertEqual(len(rotated), 1)
+            rotated_lines = rotated[0].read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(rotated_lines), 1)
+            self.assertEqual(json.loads(rotated_lines[0])["seq"], 1)
+
     def test_service_config_round_trip_and_viewer_fields(self):
         cfg = ServiceConfig(
             zones_mode="list",
@@ -69,6 +88,8 @@ class ServiceUtilsTests(unittest.TestCase):
         self.assertFalse(restored.viewer_show_sp_abs)
         self.assertTrue(restored.viewer_show_sp_autotune)
         self.assertFalse(restored.viewer_show_mae)
+        self.assertGreater(restored.max_telemetry_log_bytes, 0)
+        self.assertGreaterEqual(restored.max_telemetry_log_files, 1)
 
     def test_from_dict_accepts_nested_viewer_and_zone_names_list(self):
         raw = {

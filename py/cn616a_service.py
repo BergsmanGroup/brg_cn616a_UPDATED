@@ -134,6 +134,63 @@ def append_jsonl(path: Path, obj: dict, *, flush_each_line: bool = True) -> None
             f.flush()
 
 
+def _prune_rotated_logs(path: Path, max_files: int) -> None:
+    keep_archives = max(0, int(max_files) - 1)
+    archives = sorted(
+        path.parent.glob(f"{path.stem}_*{path.suffix}"),
+        key=lambda p: (p.stat().st_mtime_ns, p.name),
+    )
+    while len(archives) > keep_archives:
+        old = archives.pop(0)
+        try:
+            old.unlink()
+        except Exception:
+            pass
+
+
+def append_jsonl_rotated(
+    path: Path,
+    obj: dict,
+    *,
+    max_bytes: int,
+    max_files: int,
+    flush_each_line: bool = True,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    max_bytes = max(1, int(max_bytes))
+    max_files = max(1, int(max_files))
+    payload = json.dumps(obj, separators=(",", ":")) + "\n"
+    payload_size = len(payload.encode("utf-8"))
+
+    if path.exists():
+        try:
+            current_size = path.stat().st_size
+        except OSError:
+            current_size = 0
+
+        if current_size + payload_size > max_bytes:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archived_path = path.parent / f"{path.stem}_{ts}{path.suffix}"
+            counter = 0
+            while archived_path.exists() and counter < 100:
+                counter += 1
+                archived_path = path.parent / f"{path.stem}_{ts}_{counter}{path.suffix}"
+            try:
+                path.rename(archived_path)
+            except OSError:
+                pass
+            else:
+                _prune_rotated_logs(path, max_files)
+
+    with path.open("a", encoding="utf-8") as f:
+        f.write(payload)
+        if flush_each_line:
+            f.flush()
+
+    _prune_rotated_logs(path, max_files)
+
+
 def stable_hash(obj: Any) -> str:
     b = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(b).hexdigest()
@@ -278,6 +335,16 @@ class ServiceConfig:
 
     # Logging
     flush_each_line: bool = True
+    max_service_config_log_bytes: int = 2_000_000
+    max_service_config_log_files: int = 10
+    max_telemetry_log_bytes: int = 10_000_000
+    max_telemetry_log_files: int = 10
+    max_config_log_bytes: int = 5_000_000
+    max_config_log_files: int = 10
+    max_rampsoak_log_bytes: int = 5_000_000
+    max_rampsoak_log_files: int = 10
+    max_analysis_log_bytes: int = 10_000_000
+    max_analysis_log_files: int = 10
 
     # Viewer settings for GUI (history, colors, line width)
     viewer_history_hours: float = 1.0
@@ -315,6 +382,16 @@ class ServiceConfig:
             "zones_list": list(self.zones_list),
             "zone_names": dict(self.zone_names),
             "flush_each_line": self.flush_each_line,
+            "max_service_config_log_bytes": self.max_service_config_log_bytes,
+            "max_service_config_log_files": self.max_service_config_log_files,
+            "max_telemetry_log_bytes": self.max_telemetry_log_bytes,
+            "max_telemetry_log_files": self.max_telemetry_log_files,
+            "max_config_log_bytes": self.max_config_log_bytes,
+            "max_config_log_files": self.max_config_log_files,
+            "max_rampsoak_log_bytes": self.max_rampsoak_log_bytes,
+            "max_rampsoak_log_files": self.max_rampsoak_log_files,
+            "max_analysis_log_bytes": self.max_analysis_log_bytes,
+            "max_analysis_log_files": self.max_analysis_log_files,
             "analysis_hz": self.analysis_hz,
             "gui_refresh_hz": self.gui_refresh_hz,
             "equilibrium_window_s": self.equilibrium_window_s,
@@ -366,6 +443,11 @@ class ServiceConfig:
         for k in ["telemetry_hz", "config_hz", "rampsoak_hz", "analysis_hz", "gui_refresh_hz",
                   "equilibrium_window_s", "equilibrium_threshold_c",
                   "zones_mode", "zones_list", "zone_names", "flush_each_line",
+                  "max_service_config_log_bytes", "max_service_config_log_files",
+                  "max_telemetry_log_bytes", "max_telemetry_log_files",
+                  "max_config_log_bytes", "max_config_log_files",
+                  "max_rampsoak_log_bytes", "max_rampsoak_log_files",
+                  "max_analysis_log_bytes", "max_analysis_log_files",
                   "last_serial_port", "last_serial_params", "last_tcp_host", "last_tcp_port",
                   "viewer_history_hours", "viewer_line_width",
                   "viewer_pv_color", "viewer_sp_color", "viewer_sp_autotune_color",
@@ -401,6 +483,16 @@ class ServiceConfig:
         cfg.viewer_show_sp_abs = bool(cfg.viewer_show_sp_abs)
         cfg.viewer_show_sp_autotune = bool(cfg.viewer_show_sp_autotune)
         cfg.viewer_show_mae = bool(cfg.viewer_show_mae)
+        cfg.max_service_config_log_bytes = int(cfg.max_service_config_log_bytes)
+        cfg.max_service_config_log_files = max(1, int(cfg.max_service_config_log_files))
+        cfg.max_telemetry_log_bytes = int(cfg.max_telemetry_log_bytes)
+        cfg.max_telemetry_log_files = max(1, int(cfg.max_telemetry_log_files))
+        cfg.max_config_log_bytes = int(cfg.max_config_log_bytes)
+        cfg.max_config_log_files = max(1, int(cfg.max_config_log_files))
+        cfg.max_rampsoak_log_bytes = int(cfg.max_rampsoak_log_bytes)
+        cfg.max_rampsoak_log_files = max(1, int(cfg.max_rampsoak_log_files))
+        cfg.max_analysis_log_bytes = int(cfg.max_analysis_log_bytes)
+        cfg.max_analysis_log_files = max(1, int(cfg.max_analysis_log_files))
         # ensure serial_params keys
         if not isinstance(cfg.last_serial_params, dict):
             cfg.last_serial_params = {}
@@ -493,7 +585,13 @@ class CN616AService:
             "config": self.cfg.to_dict(),
         }
         atomic_write_json(self.svc_cfg_state_path, snap)
-        append_jsonl(self.svc_cfg_log_path, snap, flush_each_line=self.cfg.flush_each_line)
+        append_jsonl_rotated(
+            self.svc_cfg_log_path,
+            snap,
+            max_bytes=self.cfg.max_service_config_log_bytes,
+            max_files=self.cfg.max_service_config_log_files,
+            flush_each_line=self.cfg.flush_each_line,
+        )
 
     def _apply_connection_settings_to_ctl(self) -> None:
         """Apply configured serial connection settings to driver before connect/reconnect."""
@@ -600,7 +698,13 @@ class CN616AService:
             "telemetry": data,
         }
         atomic_write_json(self.telemetry_state_path, state_obj)
-        append_jsonl(self.telemetry_log_path, state_obj, flush_each_line=self.cfg.flush_each_line)
+        append_jsonl_rotated(
+            self.telemetry_log_path,
+            state_obj,
+            max_bytes=self.cfg.max_telemetry_log_bytes,
+            max_files=self.cfg.max_telemetry_log_files,
+            flush_each_line=self.cfg.flush_each_line,
+        )
 
         def get_zone_block(container: Any, z: int) -> dict:
             if not isinstance(container, dict):
@@ -749,12 +853,24 @@ class CN616AService:
         atomic_write_json(self.config_state_path, state_obj)
 
         if changed:
-            append_jsonl(self.config_log_path, state_obj, flush_each_line=self.cfg.flush_each_line)
+            append_jsonl_rotated(
+                self.config_log_path,
+                state_obj,
+                max_bytes=self.cfg.max_config_log_bytes,
+                max_files=self.cfg.max_config_log_files,
+                flush_each_line=self.cfg.flush_each_line,
+            )
             return state_obj
 
         return None
 
-    def poll_rampsoak(self) -> Optional[Dict[str, Any]]:
+        append_jsonl_rotated(
+            self.rampsoak_log_path,
+            state_obj,
+            max_bytes=self.cfg.max_rampsoak_log_bytes,
+            max_files=self.cfg.max_rampsoak_log_files,
+            flush_each_line=self.cfg.flush_each_line,
+        )
         zones = self.zones_enabled
         data = self.ctl.read_rampsoak_all(zones)
 
@@ -826,7 +942,13 @@ class CN616AService:
         h = stable_hash(state_obj["analysis"])
         if h != self._last_analysis_hash:
             self._last_analysis_hash = h
-            append_jsonl(self.analysis_log_path, state_obj, flush_each_line=self.cfg.flush_each_line)
+            append_jsonl_rotated(
+                self.analysis_log_path,
+                state_obj,
+                max_bytes=self.cfg.max_analysis_log_bytes,
+                max_files=self.cfg.max_analysis_log_files,
+                flush_each_line=self.cfg.flush_each_line,
+            )
 
         return state_obj
 
