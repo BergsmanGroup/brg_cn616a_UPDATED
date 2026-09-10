@@ -62,10 +62,12 @@ try:
             sys.path.insert(0, str(py_root))
         from gui.display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
         from gui.command_panel import CommandPanel
+        from gui.run_panel import RunPanel
         from gui.state_reader import get_service_config_state
     else:
         from .display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
         from .command_panel import CommandPanel
+        from .run_panel import RunPanel
         from .state_reader import get_service_config_state
 except Exception:
     _setup_bootstrap_logging(_default_logs_dir()).exception("Failed to import GUI modules")
@@ -189,6 +191,11 @@ class CN616AGUI:
 
         self.panels.append(command_panel)
         self.panels.append(telemetry_panel)
+
+        # Run tab: "Start Run" mode (mirrors logs to a custom directory, optional scheduled stop)
+        run_panel = RunPanel(notebook, self.logs_dir, debug=self.debug)
+        notebook.add(run_panel, text="Run")
+        self.panels.append(run_panel)
         
         # Config tab
         config_panel = ConfigPanel(notebook, self.logs_dir, debug=self.debug,
@@ -345,6 +352,12 @@ class CN616AGUI:
         """Clean up when window closes."""
         for panel in self.panels:
             panel.stop_auto_refresh()
+
+        if self.chart_panel is not None and hasattr(self.chart_panel, "shutdown_render_pool"):
+            try:
+                self.chart_panel.shutdown_render_pool()
+            except Exception:
+                self.logger.exception("Failed shutting down chart render pool")
 
         try:
             if hasattr(self, "_fault_log_fh") and self._fault_log_fh:

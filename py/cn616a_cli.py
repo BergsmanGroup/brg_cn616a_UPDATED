@@ -74,6 +74,19 @@ def main():
     p = sub.add_parser("stop_autotune")
     p.add_argument("--zone", type=int, required=True)
 
+    # "Start Run" mode (mirrors logs to a custom directory)
+    p = sub.add_parser("start_run")
+    p.add_argument("--run-dir", required=True, help="Directory to mirror run logs into")
+    p.add_argument("--run-name", default=None, help="Optional label for this run")
+
+    sub.add_parser("stop_run")
+
+    p = sub.add_parser("set_run_schedule")
+    p.add_argument("--enabled", required=True, help="true/false")
+    p.add_argument("--stop-at", default=None, help="ISO-8601 timestamp with UTC offset, e.g. 2026-09-08T18:30:00-07:00")
+
+    sub.add_parser("get_run_status")
+
     args = ap.parse_args()
     cid = uuid.uuid4().hex[:8]
 
@@ -163,6 +176,19 @@ def main():
 
     elif args.op == "stop_autotune":
         msg = {"id": cid, "op": "stop_autotune", "zone": args.zone}
+
+    elif args.op == "start_run":
+        msg = {"id": cid, "op": "start_run", "run_dir": args.run_dir, "run_name": args.run_name}
+
+    elif args.op == "stop_run":
+        msg = {"id": cid, "op": "stop_run"}
+
+    elif args.op == "set_run_schedule":
+        enabled = str(args.enabled).strip().lower() in ("1", "true", "yes", "y", "on")
+        msg = {"id": cid, "op": "set_run_schedule", "enabled": enabled, "stop_at_iso": args.stop_at}
+
+    elif args.op == "get_run_status":
+        msg = {"id": cid, "op": "get_run_status"}
 
     else:
         raise SystemExit("Unknown op")

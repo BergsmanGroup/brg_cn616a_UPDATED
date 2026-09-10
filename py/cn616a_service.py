@@ -57,7 +57,7 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
@@ -552,6 +552,17 @@ class CN616AService:
         self.analysis_log_path   = self.out_dir / "cn616a_analysis_log.jsonl"
         self._last_analysis_hash: Optional[str] = None
 
+        # "Start Run" mode: mirrors log JSONL into a user-chosen directory for the duration of a run.
+        self._run_active: bool = False
+        self._run_dir: Optional[Path] = None
+        self._run_name: str = ""
+        self._run_started_ts: Optional[str] = None
+        self._run_started_monotonic: Optional[float] = None
+        # Scheduled auto-stop is a plain value compared every loop iteration (no timer/thread to
+        # cancel), so toggling it or editing the target time mid-run is always safe.
+        self._run_schedule_enabled: bool = False
+        self._run_schedule_stop_at: Optional[datetime] = None
+
         # state hashes (to avoid noisy config logs)
         self._last_config_hash: Optional[str] = None
         self._last_rampsoak_hash: Optional[str] = None
@@ -705,6 +716,7 @@ class CN616AService:
             max_files=self.cfg.max_telemetry_log_files,
             flush_each_line=self.cfg.flush_each_line,
         )
+        self._append_run_copy("cn616a_telemetry_log.jsonl", state_obj)
 
         def get_zone_block(container: Any, z: int) -> dict:
             if not isinstance(container, dict):
@@ -860,17 +872,17 @@ class CN616AService:
                 max_files=self.cfg.max_config_log_files,
                 flush_each_line=self.cfg.flush_each_line,
             )
+            self._append_run_copy("cn616a_config_log.jsonl", state_obj)
             return state_obj
 
         return None
 
-        append_jsonl_rotated(
-            self.rampsoak_log_path,
-            state_obj,
-            max_bytes=self.cfg.max_rampsoak_log_bytes,
-            max_files=self.cfg.max_rampsoak_log_files,
-            flush_each_line=self.cfg.flush_each_line,
-        )
+    def poll_rampsoak(self) -> Optional[Dict[str, Any]]:
+        """
+        Poll ramp/soak profiles from controller, write:
+        - cn616a_rampsoak_state.json (snapshot)
+        - cn616a_rampsoak_log.jsonl (append only when data changes)
+        """
         zones = self.zones_enabled
         data = self.ctl.read_rampsoak_all(zones)
 
@@ -887,8 +899,16 @@ class CN616AService:
 
         atomic_write_json(self.rampsoak_state_path, state_obj)
         if changed:
-            append_jsonl(self.rampsoak_log_path, state_obj, flush_each_line=self.cfg.flush_each_line)
-        return state_obj if changed else None
+            append_jsonl_rotated(
+                self.rampsoak_log_path,
+                state_obj,
+                max_bytes=self.cfg.max_rampsoak_log_bytes,
+                max_files=self.cfg.max_rampsoak_log_files,
+                flush_each_line=self.cfg.flush_each_line,
+            )
+            self._append_run_copy("cn616a_rampsoak_log.jsonl", state_obj)
+            return state_obj
+        return None
 
     def poll_analysis(self) -> Dict[str, Any]:
         now_m = time.monotonic()
@@ -949,8 +969,68 @@ class CN616AService:
                 max_files=self.cfg.max_analysis_log_files,
                 flush_each_line=self.cfg.flush_each_line,
             )
+            self._append_run_copy("cn616a_analysis_log.jsonl", state_obj)
 
         return state_obj
+
+    # -----------------------------
+    # "Start Run" mode (mirrors logs into a custom directory for a bounded time window)
+    # -----------------------------
+    def _append_run_copy(self, filename: str, obj: dict) -> None:
+        """Mirror a just-written log line into the active run's custom directory, if any."""
+        if not self._run_active or self._run_dir is None:
+            return
+        try:
+            append_jsonl(self._run_dir / filename, obj, flush_each_line=self.cfg.flush_each_line)
+        except Exception:
+            LOGGER.exception("Failed mirroring %s into run directory %s", filename, self._run_dir)
+
+    def _write_run_info(self, *, event: str, reason: Optional[str] = None) -> None:
+        if self._run_dir is None:
+            return
+        payload = {
+            "event": event,
+            "reason": reason,
+            "ts": now_iso_local_ms(),
+            "run_name": self._run_name,
+            "run_started_ts": self._run_started_ts,
+            "unit": self.unit,
+            "port": self.port,
+            "zones_enabled": self.zones_enabled,
+            "run_schedule_enabled": self._run_schedule_enabled,
+            "run_schedule_stop_at": self._run_schedule_stop_at.isoformat() if self._run_schedule_stop_at else None,
+        }
+        try:
+            atomic_write_json(self._run_dir / "cn616a_run_info.json", payload)
+        except Exception:
+            LOGGER.exception("Failed writing run info snapshot to %s", self._run_dir)
+
+    def _run_status_payload(self) -> dict:
+        elapsed_s = None
+        if self._run_active and self._run_started_monotonic is not None:
+            elapsed_s = max(0.0, time.monotonic() - self._run_started_monotonic)
+        return {
+            "run_active": self._run_active,
+            "run_dir": str(self._run_dir) if self._run_dir else None,
+            "run_name": self._run_name,
+            "run_started_ts": self._run_started_ts,
+            "run_elapsed_s": elapsed_s,
+            "run_schedule_enabled": self._run_schedule_enabled,
+            "run_schedule_stop_at": self._run_schedule_stop_at.isoformat() if self._run_schedule_stop_at else None,
+        }
+
+    def _do_stop_run(self, *, reason: str) -> None:
+        if not self._run_active:
+            return
+        self._write_run_info(event="stopped", reason=reason)
+        self._log_service_config(event="stop_run", patch={"reason": reason})
+        self._run_active = False
+        self._run_dir = None
+        self._run_name = ""
+        self._run_started_ts = None
+        self._run_started_monotonic = None
+        # Schedule (enabled flag + target time) is left as configured so it can be reused by the
+        # next run without the GUI needing to resend it.
 
     # -----------------------------
     # Command execution
@@ -1059,6 +1139,56 @@ class CN616AService:
             if op == "read_rampsoak":
                 changed = self.poll_rampsoak()
                 return {"id": cid, "ok": True, "changed": bool(changed), "zones_enabled": self.zones_enabled}
+
+            # ---- "Start Run" mode ----
+            if op == "start_run":
+                run_dir_raw = cmd.get("run_dir")
+                if not run_dir_raw:
+                    return {"id": cid, "ok": False, "error": "run_dir is required"}
+                run_dir = Path(str(run_dir_raw))
+                try:
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    return {"id": cid, "ok": False, "error": f"Cannot create run_dir: {e}"}
+
+                self._run_active = True
+                self._run_dir = run_dir
+                self._run_name = str(cmd.get("run_name") or "").strip()
+                self._run_started_ts = now_iso_local_ms()
+                self._run_started_monotonic = time.monotonic()
+                self._write_run_info(event="started")
+                self._log_service_config(
+                    event="start_run",
+                    patch={"run_dir": str(run_dir), "run_name": self._run_name},
+                )
+                return {"id": cid, "ok": True, **self._run_status_payload()}
+
+            if op == "stop_run":
+                was_active = self._run_active
+                self._do_stop_run(reason="manual")
+                return {"id": cid, "ok": True, "was_active": was_active, **self._run_status_payload()}
+
+            if op == "set_run_schedule":
+                enabled = bool(cmd.get("enabled", False))
+                stop_at_raw = cmd.get("stop_at_iso")
+                stop_at_dt = None
+                if enabled:
+                    if not stop_at_raw:
+                        return {"id": cid, "ok": False, "error": "stop_at_iso is required when enabling schedule"}
+                    try:
+                        stop_at_dt = datetime.fromisoformat(str(stop_at_raw))
+                    except Exception:
+                        return {"id": cid, "ok": False, "error": "stop_at_iso must be an ISO-8601 timestamp"}
+                    if stop_at_dt.tzinfo is None:
+                        return {"id": cid, "ok": False, "error": "stop_at_iso must include a UTC offset"}
+                # Plain value swap: safe to call any number of times, whether a run is active or not,
+                # and safe to call again mid-run with a different time.
+                self._run_schedule_enabled = enabled
+                self._run_schedule_stop_at = stop_at_dt
+                return {"id": cid, "ok": True, **self._run_status_payload()}
+
+            if op == "get_run_status":
+                return {"id": cid, "ok": True, **self._run_status_payload()}
 
             return {"id": cid, "ok": False, "error": f"Unknown op: {op}"}
 
@@ -1181,6 +1311,13 @@ class CN616AService:
                         self._last_err = f"{type(e).__name__}: {e}"
                         LOGGER.exception("Analysis poll failed")
                 next_an = now + an_period
+
+            # 6) Scheduled run auto-stop. A cheap comparison against a plain stored value each
+            # iteration - no timer/thread to cancel, so toggling the checkbox or editing the target
+            # time mid-run from the GUI can never leave a stale callback armed.
+            if self._run_active and self._run_schedule_enabled and self._run_schedule_stop_at is not None:
+                if datetime.now(timezone.utc) >= self._run_schedule_stop_at:
+                    self._do_stop_run(reason="scheduled")
 
             # Avoid busy loop
             time.sleep(0.005)

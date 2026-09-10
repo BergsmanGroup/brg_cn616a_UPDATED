@@ -47,6 +47,9 @@ class FakeCtl:
     def read_config(self, zones):
         return {"zones": {str(z): {"sp_abs_c": 80.0} for z in zones}}
 
+    def read_telemetry(self, zones):
+        return {"zones": {str(z): {"pv_c": 25.0, "sp_abs_c": 80.0} for z in zones}}
+
     def read_rampsoak_all(self, zones):
         return {"zones": {str(z): {"segments": []} for z in zones}}
 
@@ -117,6 +120,66 @@ class ServiceCommandTests(unittest.TestCase):
         resp = self.svc.handle_command({"id": "x", "op": "set_sp_abs", "zone": 1, "value_c": 100})
         self.assertFalse(resp["ok"])
         self.assertIn("ValueError", resp["error"])
+
+    def test_read_rampsoak_dispatches_to_controller_and_writes_state(self):
+        resp = self.svc.handle_command({"id": "x", "op": "read_rampsoak"})
+        self.assertTrue(resp["ok"])
+        self.assertTrue((self.out_dir / "cn616a_rampsoak_state.json").exists())
+
+    def test_start_run_stop_run_lifecycle(self):
+        run_dir = Path(self.tmp.name) / "run1"
+        resp = self.svc.handle_command({"id": "a", "op": "start_run", "run_dir": str(run_dir)})
+        self.assertTrue(resp["ok"])
+        self.assertTrue(resp["run_active"])
+        self.assertTrue(run_dir.exists())
+        self.assertTrue((run_dir / "cn616a_run_info.json").exists())
+
+        status = self.svc.handle_command({"id": "b", "op": "get_run_status"})
+        self.assertTrue(status["run_active"])
+        self.assertEqual(status["run_dir"], str(run_dir))
+
+        resp2 = self.svc.handle_command({"id": "c", "op": "stop_run"})
+        self.assertTrue(resp2["ok"])
+        self.assertTrue(resp2["was_active"])
+        self.assertFalse(resp2["run_active"])
+
+        # Stopping again is idempotent.
+        resp3 = self.svc.handle_command({"id": "d", "op": "stop_run"})
+        self.assertTrue(resp3["ok"])
+        self.assertFalse(resp3["was_active"])
+
+    def test_start_run_requires_run_dir(self):
+        resp = self.svc.handle_command({"id": "a", "op": "start_run"})
+        self.assertFalse(resp["ok"])
+
+    def test_run_mirrors_telemetry_log_into_run_dir(self):
+        run_dir = Path(self.tmp.name) / "run2"
+        self.svc.handle_command({"id": "a", "op": "start_run", "run_dir": str(run_dir)})
+        self.svc.poll_telemetry()
+        self.assertTrue((run_dir / "cn616a_telemetry_log.jsonl").exists())
+
+    def test_set_run_schedule_requires_stop_at_when_enabled(self):
+        resp = self.svc.handle_command({"id": "a", "op": "set_run_schedule", "enabled": True})
+        self.assertFalse(resp["ok"])
+
+        resp2 = self.svc.handle_command({
+            "id": "b", "op": "set_run_schedule", "enabled": True,
+            "stop_at_iso": "2026-09-08T18:30:00-07:00",
+        })
+        self.assertTrue(resp2["ok"])
+        self.assertTrue(resp2["run_schedule_enabled"])
+
+        # Can be disabled again mid-run without needing a stop_at_iso.
+        resp3 = self.svc.handle_command({"id": "c", "op": "set_run_schedule", "enabled": False})
+        self.assertTrue(resp3["ok"])
+        self.assertFalse(resp3["run_schedule_enabled"])
+
+    def test_set_run_schedule_rejects_naive_datetime(self):
+        resp = self.svc.handle_command({
+            "id": "a", "op": "set_run_schedule", "enabled": True,
+            "stop_at_iso": "2026-09-08T18:30:00",
+        })
+        self.assertFalse(resp["ok"])
 
 
 if __name__ == "__main__":

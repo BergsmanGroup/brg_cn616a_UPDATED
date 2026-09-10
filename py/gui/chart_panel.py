@@ -9,6 +9,7 @@ Live telemetry chart panel with 1-hour rolling window.
 - Clear button to reset display
 """
 
+import base64
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -21,27 +22,15 @@ import traceback
 from zoneinfo import ZoneInfo
 import logging
 
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.ticker import ScalarFormatter, MaxNLocator
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from matplotlib.figure import Figure
+from .chart_render_pool import ChartRenderPool
 
 
 LOGGER = logging.getLogger("cn616a.gui")
 
 
-class ZoneNavigationToolbar(NavigationToolbar2Tk):
-    """Navigation toolbar that notifies panel when Home is pressed."""
-
-    def __init__(self, canvas, window, on_home_callback=None):
-        self._on_home_callback = on_home_callback
-        super().__init__(canvas, window)
-
-    def home(self, *args):
-        super().home(*args)
-        if callable(self._on_home_callback):
-            self._on_home_callback()
+# Minimum visible time range (seconds) allowed when zooming in on a zone chart.
+MIN_ZOOM_SECONDS = 5.0
+_RENDER_DPI = 100.0
 
 
 _TELEMETRY_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
@@ -507,10 +496,16 @@ def load_telemetry_points(logs_dir: Path, time_window_hours: float = 1.0, debug:
 
 
 class ZoneChartPanel(tk.Frame):
-    """Individual zone chart with PV and setpoints."""
-    
+    """Individual zone chart with PV and setpoints.
+
+    Rendering happens in a separate worker process (see chart_render_pool.py); this
+    panel only ever displays a finished PNG image on a plain tk.Canvas and never
+    touches matplotlib directly, so a native rendering crash cannot reach the GUI.
+    """
+
     def __init__(self, parent, zone_id: int, logs_dir: Path,
                  viewer_cfg: Dict[str, Any],
+                 render_pool: ChartRenderPool,
                  zone_name: Optional[str] = None,
                  refresh_interval: float = 2.0, debug: bool = False):
         super().__init__(parent)
@@ -519,6 +514,7 @@ class ZoneChartPanel(tk.Frame):
         self.logs_dir = Path(logs_dir)
         self.refresh_interval = refresh_interval
         self.debug = debug
+        self.render_pool = render_pool
         
         # viewer configuration defaults
         self.history_hours = viewer_cfg.get("history_hours", 1.0)
@@ -539,26 +535,31 @@ class ZoneChartPanel(tk.Frame):
         self._last_signature: Optional[Tuple[Any, ...]] = None
         
         # UI
-        self.fig: Optional[Figure] = None
-        self.canvas: Optional[FigureCanvasTkAgg] = None
-        self.toolbar: Optional[NavigationToolbar2Tk] = None
+        self.plot_canvas: Optional[tk.Canvas] = None
         self.status_label: Optional[ttk.Label] = None
         self.header_label: Optional[ttk.Label] = None
         self.metrics_label: Optional[ttk.Label] = None
-        self.ax_pv = None
-        self.ax_sp = None
         self.current_mae: Optional[float] = None
         self.mae_series: Dict[str, List[Any]] = {"times": [], "values": []}
-        self._mae_ylim: Optional[Tuple[float, float]] = None
+        self._photo_image = None  # keep a reference alive; Tk drops images with no referrer
+        self._image_item = None
 
-        # View state (for preserving user zoom/pan view)
-        self._updating_plot = False
-        self._view_locked = False
-        self._home_view: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
-        self._locked_view: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
+        # Rendered-view bookkeeping (populated once a render result arrives)
+        self._last_axes_bbox_px: Optional[Tuple[float, float, float, float]] = None
+        self._last_fig_size_px: Optional[Tuple[float, float]] = None
+        self._last_xlim: Optional[Tuple[datetime, datetime]] = None
+
+        # View state: None means "auto" (full history window); otherwise an explicit zoom range.
+        self._view_xlim: Optional[Tuple[datetime, datetime]] = None
         self._interaction_active = False
         self._pending_zone_data: Optional[Dict[str, List[Any]]] = None
-        self._draw_scheduled = False
+
+        # Left-drag rubber-band zoom state
+        self._zoom_drag_start_px: Optional[int] = None
+        self._zoom_rect_item: Optional[int] = None
+        # Right-drag pan state
+        self._pan_drag_start_px: Optional[int] = None
+        self._pan_start_xlim: Optional[Tuple[datetime, datetime]] = None
         
         self.create_widgets()
         
@@ -567,7 +568,7 @@ class ZoneChartPanel(tk.Frame):
     
     def _deferred_init(self):
         """Deferred initialization to ensure widget is properly rendered."""
-        self._update_plot()
+        self._request_render()
     
     def create_widgets(self):
         # Header
@@ -578,9 +579,8 @@ class ZoneChartPanel(tk.Frame):
         self.header_label.pack(side=tk.LEFT)
         self._update_zone_header()
         
-        # Clear button (only for this zone)
-        clear_btn = ttk.Button(header, text="Clear This Zone", command=self.clear_chart)
-        clear_btn.pack(side=tk.RIGHT, padx=5)
+        ttk.Button(header, text="Home", command=self._on_home_pressed).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(header, text="Clear This Zone", command=self.clear_chart).pack(side=tk.RIGHT, padx=5)
         
         # Status label
         self.status_label = ttk.Label(self, text="", font=("Arial", 9))
@@ -589,28 +589,28 @@ class ZoneChartPanel(tk.Frame):
         # Live metrics summary (centered, one line)
         self.metrics_label = ttk.Label(self, text="", font=("Arial", 10), anchor="center", justify=tk.CENTER)
         self.metrics_label.pack(fill=tk.X, padx=10, pady=(0, 4))
+
+        ttk.Label(
+            self, foreground="gray", font=("Arial", 8),
+            text="Left-drag: zoom to range | Right-drag: pan | Scroll: zoom | Home: reset view",
+        ).pack(fill=tk.X, padx=10)
         
-        # Canvas frame for matplotlib
+        # Canvas frame showing the process-rendered chart image
         self.canvas_frame = ttk.Frame(self)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Create matplotlib figure (single subplot)
-        self.fig = Figure(figsize=(12, 5), dpi=100)
-        self.ax_pv = self.fig.add_subplot(111)
-        self.ax_sp = self.ax_pv.twinx()
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.canvas_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.plot_canvas = tk.Canvas(self.canvas_frame, bg="white", highlightthickness=0)
+        self.plot_canvas.pack(fill=tk.BOTH, expand=True)
+        self._image_item = self.plot_canvas.create_image(0, 0, anchor="nw")
 
-        # Matplotlib interactive toolbar (zoom/home/save)
-        toolbar_frame = ttk.Frame(self)
-        toolbar_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
-        self.toolbar = ZoneNavigationToolbar(self.canvas, toolbar_frame, on_home_callback=self._on_home_pressed)
-        self.toolbar.update()
-
-        # Track user interactions that may change view limits.
-        self.canvas.mpl_connect("button_press_event", self._on_user_press_event)
-        self.canvas.mpl_connect("button_release_event", self._on_user_release_event)
-        self.canvas.mpl_connect("scroll_event", self._on_user_view_event)
+        self.plot_canvas.bind("<Configure>", self._on_canvas_configure)
+        self.plot_canvas.bind("<ButtonPress-1>", self._on_left_press)
+        self.plot_canvas.bind("<B1-Motion>", self._on_left_drag)
+        self.plot_canvas.bind("<ButtonRelease-1>", self._on_left_release)
+        self.plot_canvas.bind("<ButtonPress-3>", self._on_right_press)
+        self.plot_canvas.bind("<B3-Motion>", self._on_right_drag)
+        self.plot_canvas.bind("<ButtonRelease-3>", self._on_right_release)
+        self.plot_canvas.bind("<MouseWheel>", self._on_mouse_wheel)
     
     def initial_load(self):
         """Load telemetry data from logs for this zone. Applies clear cutoff if one exists."""
@@ -628,7 +628,7 @@ class ZoneChartPanel(tk.Frame):
                         filtered["sp_autotune"].append(sa)
                 zone_data = filtered
             self.zone_data = zone_data
-            self._update_plot()
+            self._request_render()
             total_points = len(self.zone_data["times"])
             self.status_label.config(text=f"Loaded {total_points} points")
             if self.debug:
@@ -792,11 +792,9 @@ class ZoneChartPanel(tk.Frame):
             if signature != self._last_signature:
                 self._last_signature = signature
                 self.zone_data = copied_zone_data
-                self._update_plot()
-                total_points = len(self.zone_data["times"])
-                self.status_label.config(text=f"Updated: {total_points} points")
-                if self.debug and total_points > 0:
-                    print(f"[ZoneChartPanel.set_zone_data Z{self.zone_id}] {total_points} points")
+                self._request_render()
+                if self.debug and len(times) > 0:
+                    print(f"[ZoneChartPanel.set_zone_data Z{self.zone_id}] {len(times)} points")
         
         except Exception as e:
             if self.debug:
@@ -808,334 +806,218 @@ class ZoneChartPanel(tk.Frame):
         Future loads will ignore older data until new points arrive."""
         self.zone_data = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
         self.mae_series = {"times": [], "values": []}
-        self._mae_ylim = None
         self._last_signature = None
-        self._view_locked = False
-        self._locked_view = None
+        self._view_xlim = None
         self.clear_cutoff = datetime.now().astimezone()
         if self.debug:
             print(f"[ZoneChartPanel.clear_chart Z{self.zone_id}] cutoff set to {self.clear_cutoff}")
-        self._update_plot()
+        self._request_render()
         self.status_label.config(text="Chart cleared")
 
-    def _capture_current_view(self):
-        if self.ax_pv is None or self.ax_sp is None:
+    # -----------------------------
+    # Pixel <-> data-time mapping (uses the axes bbox returned by the last render)
+    # -----------------------------
+    def _pixel_x_to_time(self, px_x: float) -> Optional[datetime]:
+        bbox = self._last_axes_bbox_px
+        xlim = self._last_xlim
+        if not bbox or not xlim:
             return None
-        return (
-            tuple(self.ax_pv.get_xlim()),
-            tuple(self.ax_pv.get_ylim()),
-            tuple(self.ax_sp.get_ylim()),
+        x0, _, x1, _ = bbox
+        if x1 <= x0:
+            return None
+        t0, t1 = xlim
+        frac = (px_x - x0) / (x1 - x0)
+        frac = min(1.5, max(-0.5, frac))  # allow slight overshoot at the edges for easier dragging
+        return t0 + (t1 - t0) * frac
+
+    def _apply_pending_zone_data(self, *, force_render: bool = False):
+        if self._pending_zone_data is not None:
+            self.zone_data = self._pending_zone_data
+            self._pending_zone_data = None
+            self._request_render()
+        elif force_render:
+            self._request_render()
+
+    # -----------------------------
+    # Mouse interaction: left-drag = rubber-band zoom to a time range
+    # -----------------------------
+    def _on_left_press(self, event):
+        if self._last_axes_bbox_px is None:
+            return
+        self._interaction_active = True
+        self._zoom_drag_start_px = event.x
+        self._zoom_rect_item = self.plot_canvas.create_rectangle(
+            event.x, 0, event.x, self.plot_canvas.winfo_height(),
+            outline="#3366cc", width=1, dash=(4, 2),
         )
 
-    def _apply_view(self, view):
-        if self.ax_pv is None or self.ax_sp is None or view is None:
+    def _on_left_drag(self, event):
+        if self._zoom_rect_item is None or self._zoom_drag_start_px is None:
             return
-        xlim, y_pv, y_sp = view
-        self.ax_pv.set_xlim(xlim)
-        self.ax_pv.set_ylim(y_pv)
-        self.ax_sp.set_ylim(y_sp)
+        self.plot_canvas.coords(
+            self._zoom_rect_item,
+            self._zoom_drag_start_px, 0, event.x, self.plot_canvas.winfo_height(),
+        )
 
-    def _on_user_view_event(self, _event=None):
-        if self._updating_plot or self.ax_pv is None or self.ax_sp is None:
-            return
-
-        current_view = self._capture_current_view()
-        if current_view is None:
-            return
-
-        # If user returned to home limits, unlock. Otherwise lock on user-selected view.
-        if self._home_view is not None and self._views_close(current_view, self._home_view):
-            self._view_locked = False
-            self._locked_view = None
-        else:
-            self._view_locked = True
-            self._locked_view = current_view
-
-    def _toolbar_mode_active(self) -> bool:
-        if self.toolbar is None:
-            return False
-        mode = str(getattr(self.toolbar, "mode", "") or "").strip().lower()
-        return mode != ""
-
-    def _on_user_press_event(self, event=None):
-        if self._updating_plot:
-            return
-        if event is not None and event.inaxes is None:
-            return
-        if self._toolbar_mode_active():
-            self._interaction_active = True
-
-    def _on_user_release_event(self, event=None):
+    def _on_left_release(self, event):
+        if self._zoom_rect_item is not None:
+            self.plot_canvas.delete(self._zoom_rect_item)
+            self._zoom_rect_item = None
         self._interaction_active = False
-        self._on_user_view_event(event)
+        start_px = self._zoom_drag_start_px
+        self._zoom_drag_start_px = None
 
-        # Apply latest deferred data once interaction is complete.
-        if self._pending_zone_data is not None:
-            pending = self._pending_zone_data
-            self._pending_zone_data = None
-            self.set_zone_data(pending)
+        if start_px is None or abs(event.x - start_px) < 4:
+            self._apply_pending_zone_data()  # treat as a click, not a drag
+            return
+
+        t_a = self._pixel_x_to_time(start_px)
+        t_b = self._pixel_x_to_time(event.x)
+        if t_a is None or t_b is None:
+            self._apply_pending_zone_data()
+            return
+
+        lo, hi = (t_a, t_b) if t_a < t_b else (t_b, t_a)
+        if (hi - lo).total_seconds() < MIN_ZOOM_SECONDS:
+            self._apply_pending_zone_data()
+            return
+
+        self._view_xlim = (lo, hi)
+        self._apply_pending_zone_data(force_render=True)
+
+    # -----------------------------
+    # Mouse interaction: right-drag = pan the visible time range
+    # -----------------------------
+    def _on_right_press(self, event):
+        if self._last_axes_bbox_px is None or self._last_xlim is None:
+            return
+        self._interaction_active = True
+        self._pan_drag_start_px = event.x
+        self._pan_start_xlim = self._view_xlim or self._last_xlim
+
+    def _on_right_drag(self, event):
+        if self._pan_drag_start_px is None or self._image_item is None:
+            return
+        # Cheap visual feedback only; the exact recompute + re-render happens on release.
+        self.plot_canvas.moveto(self._image_item, event.x - self._pan_drag_start_px, 0)
+
+    def _on_right_release(self, event):
+        self._interaction_active = False
+        start_px = self._pan_drag_start_px
+        base_xlim = self._pan_start_xlim
+        self._pan_drag_start_px = None
+        self._pan_start_xlim = None
+        if self._image_item is not None:
+            self.plot_canvas.moveto(self._image_item, 0, 0)
+
+        bbox = self._last_axes_bbox_px
+        if start_px is None or base_xlim is None or bbox is None:
+            self._apply_pending_zone_data()
+            return
+        x0, _, x1, _ = bbox
+        if x1 <= x0:
+            self._apply_pending_zone_data()
+            return
+
+        t0, t1 = base_xlim
+        width_s = (t1 - t0).total_seconds()
+        shift_s = -((event.x - start_px) / (x1 - x0)) * width_s
+        self._view_xlim = (t0 + timedelta(seconds=shift_s), t1 + timedelta(seconds=shift_s))
+        self._apply_pending_zone_data(force_render=True)
+
+    # -----------------------------
+    # Mouse interaction: scroll wheel = zoom centered on cursor
+    # -----------------------------
+    def _on_mouse_wheel(self, event):
+        if self._last_axes_bbox_px is None or self._last_xlim is None:
+            return
+        anchor_time = self._pixel_x_to_time(event.x)
+        if anchor_time is None:
+            return
+
+        t0, t1 = self._view_xlim or self._last_xlim
+        width_s = max(MIN_ZOOM_SECONDS, (t1 - t0).total_seconds())
+        factor = 0.85 if event.delta > 0 else (1.0 / 0.85)
+        max_width_s = max(width_s, float(self.history_hours) * 3600.0 * 4.0)
+        new_width_s = min(max_width_s, max(MIN_ZOOM_SECONDS, width_s * factor))
+
+        anchor_frac = (anchor_time - t0).total_seconds() / width_s if width_s > 0 else 0.5
+        new_t0 = anchor_time - timedelta(seconds=anchor_frac * new_width_s)
+        self._view_xlim = (new_t0, new_t0 + timedelta(seconds=new_width_s))
+        self._request_render()
 
     def _on_home_pressed(self):
-        """Unlock user view when toolbar Home is pressed."""
-        self._view_locked = False
-        self._locked_view = None
+        """Reset to the auto-scaled full-history view."""
+        self._view_xlim = None
+        self._request_render()
 
-    def _safe_request_draw(self):
-        """Request a deferred canvas draw while avoiding re-entrant render calls."""
-        if self.canvas is None:
+    def _on_canvas_configure(self, _event=None):
+        # A resize changes the figure size in inches; re-render at the new size. submit()
+        # naturally coalesces rapid resize events since only one render per zone is ever in flight.
+        self._request_render()
+
+    # -----------------------------
+    # Render request / result handling (actual drawing happens in a worker process)
+    # -----------------------------
+    def _request_render(self):
+        if self.render_pool is None or self.plot_canvas is None:
+            return
+        width_px = max(50, int(self.plot_canvas.winfo_width()))
+        height_px = max(50, int(self.plot_canvas.winfo_height()))
+
+        request = {
+            "zone_name": self.zone_name,
+            "times": list(self.zone_data.get("times", [])),
+            "pv": list(self.zone_data.get("pv", [])),
+            "sp": list(self.zone_data.get("sp", [])),
+            "sp_autotune": list(self.zone_data.get("sp_autotune", [])),
+            "mae_times": list(self.mae_series.get("times", [])),
+            "mae_values": list(self.mae_series.get("values", [])),
+            "history_hours": float(self.history_hours),
+            "view_xlim": self._view_xlim,
+            "line_width": float(self.line_width),
+            "pv_color": self.pv_color,
+            "sp_color": self.sp_color,
+            "sp_autotune_color": self.sp_autotune_color,
+            "show_sp_abs": bool(self.show_sp_abs),
+            "show_sp_autotune": bool(self.show_sp_autotune),
+            "show_mae": bool(self.show_mae),
+            "fig_width_in": width_px / _RENDER_DPI,
+            "fig_height_in": height_px / _RENDER_DPI,
+            "dpi": _RENDER_DPI,
+            "tz_name": "America/Los_Angeles",
+        }
+        self.render_pool.submit(self.zone_id, request)
+
+    def on_render_result(self, result: Dict[str, Any]):
+        """Called by the owning ChartPanel when a render finishes for this zone."""
+        if "error" in result:
+            self.status_label.config(text=f"Chart render error: {result['error']}")
+            LOGGER.error("Chart render failed for zone %s: %s", self.zone_id, result["error"])
+            return
+
+        png_bytes = result.get("png")
+        if not png_bytes:
             return
         try:
-            widget = self.canvas.get_tk_widget()
-            if widget is None or not widget.winfo_exists():
-                return
+            photo = tk.PhotoImage(data=base64.b64encode(png_bytes).decode("ascii"), format="png")
         except Exception:
-            LOGGER.exception("Failed checking chart widget state before draw")
+            LOGGER.exception("Failed decoding rendered chart image for zone %s", self.zone_id)
             return
 
-        if self._draw_scheduled:
-            return
+        self._photo_image = photo
+        self.plot_canvas.itemconfigure(self._image_item, image=photo)
+        self.plot_canvas.coords(self._image_item, 0, 0)
+        self._last_axes_bbox_px = result.get("axes_bbox_px")
+        self._last_fig_size_px = result.get("fig_size_px")
+        self._last_xlim = result.get("xlim")
 
-        self._draw_scheduled = True
+        total_points = len(self.zone_data.get("times", []))
+        if result.get("has_data"):
+            self.status_label.config(text=f"Updated: {total_points} points")
+        else:
+            self.status_label.config(text="No data")
 
-        def _draw_once():
-            self._draw_scheduled = False
-            try:
-                if self.canvas is not None:
-                    self.canvas.draw_idle()
-            except Exception:
-                LOGGER.exception("Deferred chart draw failed for zone %s", self.zone_id)
-
-        try:
-            self.after_idle(_draw_once)
-        except Exception:
-            self._draw_scheduled = False
-            LOGGER.exception("Failed scheduling deferred chart draw for zone %s", self.zone_id)
-
-    @staticmethod
-    def _views_close(a, b, tol=1e-9):
-        for pair_a, pair_b in zip(a, b):
-            for va, vb in zip(pair_a, pair_b):
-                if abs(float(va) - float(vb)) > tol:
-                    return False
-        return True
-    
-    def _update_plot(self):
-        """Redraw the matplotlib chart for this zone."""
-        try:
-            if self.debug:
-                print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] Starting plot update...")
-
-            previous_locked_view = self._locked_view if self._view_locked else None
-            self._updating_plot = True
-
-            if self.ax_pv is None or self.ax_sp is None:
-                self.ax_pv = self.fig.add_subplot(111)
-                self.ax_sp = self.ax_pv.twinx()
-
-            ax_pv = self.ax_pv
-            ax_sp = self.ax_sp
-            ax_pv.cla()
-            ax_sp.cla()
-            
-            times = self.zone_data["times"]
-            pvs = self.zone_data["pv"]
-            sps = self.zone_data["sp"]
-            sp_autotunes = self.zone_data["sp_autotune"]
-            
-            # Convert all times to display timezone for consistent display
-            display_tz = get_display_timezone()
-            times_display = [
-                t.astimezone(display_tz) if getattr(t, "tzinfo", None) is not None else t
-                for t in times
-            ]
-            
-            if not times:
-                ax_pv.text(0.5, 0.5, "No data", ha="center", va="center", 
-                          transform=ax_pv.transAxes, fontsize=14)
-                self._safe_request_draw()
-                return
-            
-            # Determine x-range from data itself and cap to configured history window
-            max_time = max(times_display)
-            min_time = max_time - timedelta(hours=self.history_hours)
-            if times_display:
-                data_min = min(times_display)
-                if data_min > min_time:
-                    min_time = data_min
-
-            if min_time >= max_time:
-                min_time = max_time - timedelta(minutes=1)
-            
-            # Plot PV on left axis (solid blue line)
-            pv_times = []
-            pv_vals = []
-            for t, p in zip(times_display, pvs):
-                if isinstance(p, (int, float)) and math.isfinite(float(p)):
-                    pv_times.append(t)
-                    pv_vals.append(float(p))
-            if pv_vals:
-                pv_plot_times, pv_plot_vals = _insert_time_gaps(pv_times, pv_vals)
-                ax_pv.plot(pv_plot_times, pv_plot_vals,
-                           color=self.pv_color,
-                           linewidth=self.line_width,
-                           label="PV", linestyle="-")
-                if self.debug:
-                    print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(pv_vals)} PV points")
-            
-            # Plot absolute setpoint on left axis
-            sp_times = []
-            sp_vals = []
-            for t, s in zip(times_display, sps):
-                if isinstance(s, (int, float)) and math.isfinite(float(s)):
-                    sp_times.append(t)
-                    sp_vals.append(float(s))
-            if self.show_sp_abs and sp_vals:
-                sp_plot_times, sp_plot_vals = _insert_time_gaps(sp_times, sp_vals)
-                ax_pv.plot(sp_plot_times, sp_plot_vals,
-                           color=self.sp_color,
-                           linewidth=self.line_width,
-                           label="SP Abs", linestyle="-")
-                if self.debug:
-                    print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(sp_vals)} SP Abs points")
-            
-            # Plot autotune setpoint on left axis
-            sp_auto_times = []
-            sp_auto_vals = []
-            for t, s in zip(times_display, sp_autotunes):
-                if isinstance(s, (int, float)) and math.isfinite(float(s)):
-                    sp_auto_times.append(t)
-                    sp_auto_vals.append(float(s))
-            if self.show_sp_autotune and sp_auto_vals:
-                sp_auto_plot_times, sp_auto_plot_vals = _insert_time_gaps(sp_auto_times, sp_auto_vals)
-                ax_pv.plot(sp_auto_plot_times, sp_auto_plot_vals,
-                           color=self.sp_autotune_color,
-                           linewidth=self.line_width,
-                           label="SP Autotune", linestyle="--")
-                if self.debug:
-                    print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] plotted {len(sp_auto_vals)} SP Autotune points")
-            
-            # Configure axes
-            ax_pv.set_xlabel("Time", fontsize=10)
-            ax_pv.set_ylabel("Temperature (°C)", fontsize=10, fontweight="bold")
-            
-            ax_pv.tick_params(axis="y", labelsize=9)
-            ax_pv.tick_params(axis="x", labelsize=9)
-
-            # Keep left Y-axis in plain decimal format (no scientific notation / offset).
-            y_formatter = ScalarFormatter(useOffset=False)
-            y_formatter.set_scientific(False)
-            ax_pv.yaxis.set_major_formatter(y_formatter)
-
-            # Plot MAE trend on secondary Y-axis and smooth axis updates to reduce jitter.
-            mae_times = [
-                t.astimezone(display_tz) if getattr(t, "tzinfo", None) is not None else t
-                for t in self.mae_series["times"]
-            ]
-            mae_vals = list(self.mae_series["values"])
-            mae_pairs = [
-                (t, v)
-                for t, v in zip(mae_times, mae_vals)
-                if v is not None and t >= min_time and t <= max_time
-            ]
-
-            if self.show_mae and mae_pairs:
-                mae_plot_times = [t for t, _ in mae_pairs]
-                mae_plot_vals = [float(v) for _, v in mae_pairs if math.isfinite(float(v))]
-                if not mae_plot_vals:
-                    mae_plot_times = []
-
-            if self.show_mae and mae_pairs and mae_plot_vals:
-                mae_plot_times, mae_plot_vals = _insert_time_gaps(mae_plot_times, mae_plot_vals)
-                ax_sp.plot(
-                    mae_plot_times,
-                    mae_plot_vals,
-                    color="darkgreen",
-                    linewidth=max(1.5, float(self.line_width) * 0.8),
-                    linestyle="-",
-                    label="MAE",
-                )
-
-                mae_min = min(mae_plot_vals)
-                mae_max = max(mae_plot_vals)
-                if mae_max - mae_min < 1e-9:
-                    pad = max(0.05, abs(mae_max) * 0.2)
-                else:
-                    pad = max(0.02, (mae_max - mae_min) * 0.15)
-
-                target_lower = max(0.0, mae_min - pad)
-                target_upper = max(target_lower + 0.05, mae_max + pad)
-                if self._mae_ylim is None:
-                    self._mae_ylim = (target_lower, target_upper)
-                else:
-                    prev_lower, prev_upper = self._mae_ylim
-                    smooth_lower = prev_lower * 0.8 + target_lower * 0.2
-                    smooth_upper = prev_upper * 0.8 + target_upper * 0.2
-                    # Never clip current data while smoothing.
-                    smooth_lower = min(smooth_lower, target_lower)
-                    smooth_upper = max(smooth_upper, target_upper)
-                    if smooth_upper - smooth_lower < 0.05:
-                        smooth_upper = smooth_lower + 0.05
-                    self._mae_ylim = (max(0.0, smooth_lower), smooth_upper)
-
-                ax_sp.set_ylim(*self._mae_ylim)
-                ax_sp.set_ylabel("MAE (°C)", color="darkgreen", fontsize=10, fontweight="bold")
-                ax_sp.yaxis.set_label_position("right")
-                ax_sp.yaxis.tick_right()
-                # Use a fixed tick-count locator to reduce backend churn in tick generation.
-                ax_sp.yaxis.set_major_locator(MaxNLocator(nbins=4, min_n_ticks=3))
-                ax_sp.tick_params(axis="y", right=True, labelright=True, labelcolor="darkgreen", labelsize=9)
-                ax_sp.tick_params(axis="x", bottom=False, labelbottom=False)
-                mae_formatter = ScalarFormatter(useOffset=False)
-                mae_formatter.set_scientific(False)
-                ax_sp.yaxis.set_major_formatter(mae_formatter)
-            else:
-                self._mae_ylim = None
-                ax_sp.set_ylabel("")
-                ax_sp.set_yticks([])
-                ax_sp.tick_params(axis="y", right=True, labelright=False)
-                ax_sp.tick_params(axis="x", bottom=False, labelbottom=False)
-            
-            # Set X-axis range using computed bounds
-            ax_pv.set_xlim(min_time, max_time)
-            ax_pv.xaxis.set_major_locator(mdates.AutoDateLocator())
-            ax_pv.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S", tz=display_tz))
-            
-            # Rotate x-axis labels using axis-level API to avoid per-label tick object churn.
-            ax_pv.tick_params(axis="x", labelrotation=45)
-            
-            ax_pv.grid(True, alpha=0.3, linestyle="-", linewidth=0.5)
-            
-            # Add combined legend for temperature and MAE traces.
-            all_lines = ax_pv.get_lines() + ax_sp.get_lines()
-            if all_lines:
-                labels = [l.get_label() for l in all_lines]
-                legend = ax_pv.legend(all_lines, labels, loc="upper left", fontsize=9)
-                legend.set_zorder(1000)
-                legend.get_frame().set_alpha(0.9)
-
-            # Home view is the auto-scaled view for this data.
-            self._home_view = self._capture_current_view()
-
-            # Preserve user-selected rectangle zoom/pan while locked.
-            if previous_locked_view is not None:
-                self._apply_view(previous_locked_view)
-                self._locked_view = previous_locked_view
-            
-            # Redraw canvas (deferred/coalesced for stability on TkAgg).
-            self._safe_request_draw()
-            
-            if self.debug:
-                print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] Canvas drawn successfully")
-        
-        except Exception as e:
-            error_msg = f"Plot error: {str(e)}"
-            self.status_label.config(text=error_msg)
-            LOGGER.exception("ZoneChartPanel._update_plot failed for zone %s", self.zone_id)
-            if self.debug:
-                print(f"[ZoneChartPanel._update_plot Z{self.zone_id}] {error_msg}\n{traceback.format_exc()}")
-        finally:
-            self._updating_plot = False
-    
     def destroy(self):
         """Clean up when panel is destroyed."""
         self.stop_auto_refresh()
@@ -1153,10 +1035,16 @@ class ChartPanel(tk.Frame):
         
         # Zone panels
         self.zone_panels: List[ZoneChartPanel] = []
+        self._zone_panel_by_id: Dict[int, ZoneChartPanel] = {}
         self._refresh_after_id: Optional[str] = None
+        self._render_poll_after_id: Optional[str] = None
         self.title_label: Optional[ttk.Label] = None
         self.notebook: Optional[ttk.Notebook] = None
         self._zone_names: Dict[int, str] = {z: f"Zone {z}" for z in range(1, 7)}
+
+        # One shared render worker process for all six zones; a native rendering crash
+        # kills only this worker, never the GUI (see chart_render_pool.py).
+        self.render_pool = ChartRenderPool()
         
         self.create_widgets()
         
@@ -1204,12 +1092,14 @@ class ChartPanel(tk.Frame):
             zone_panel = ZoneChartPanel(
                 self.notebook, zone_id, self.logs_dir,
                 viewer_cfg,
+                self.render_pool,
                 zone_name=self._zone_names.get(zone_id, f"Zone {zone_id}"),
                 refresh_interval=self.refresh_interval,
                 debug=self.debug
             )
             self.notebook.add(zone_panel, text=self._zone_names.get(zone_id, f"Zone {zone_id}"))
             self.zone_panels.append(zone_panel)
+            self._zone_panel_by_id[zone_id] = zone_panel
 
     def apply_zone_names(self, zone_names: Dict[int, str]):
         normalized = _normalize_zone_names(zone_names)
@@ -1240,6 +1130,7 @@ class ChartPanel(tk.Frame):
         for panel in self.zone_panels:
             panel.start_auto_refresh()
         self._schedule_next_refresh()
+        self._schedule_render_poll()
 
     def _schedule_next_refresh(self):
         interval_ms = max(100, int(self.refresh_interval * 1000))
@@ -1250,6 +1141,22 @@ class ChartPanel(tk.Frame):
         self.refresh()
         if any(panel.running for panel in self.zone_panels):
             self._schedule_next_refresh()
+
+    def _schedule_render_poll(self):
+        # Polled on a short, fixed cadence independent of the (often slower) data refresh
+        # interval, so zoom/pan/scroll interactions feel responsive.
+        self._render_poll_after_id = self.after(100, self._render_poll_tick)
+
+    def _render_poll_tick(self):
+        self._render_poll_after_id = None
+        if self.render_pool.is_broken():
+            self.render_pool.restart()
+        for zone_id, result in self.render_pool.poll_results():
+            panel = self._zone_panel_by_id.get(zone_id)
+            if panel is not None:
+                panel.on_render_result(result)
+        if self._refresh_after_id is not None or any(panel.running for panel in self.zone_panels):
+            self._schedule_render_poll()
     
     def refresh(self):
         """Refresh all zone panels."""
@@ -1295,6 +1202,9 @@ class ChartPanel(tk.Frame):
         if self._refresh_after_id is not None:
             self.after_cancel(self._refresh_after_id)
             self._refresh_after_id = None
+        if self._render_poll_after_id is not None:
+            self.after_cancel(self._render_poll_after_id)
+            self._render_poll_after_id = None
         for panel in self.zone_panels:
             panel.stop_auto_refresh()
     
@@ -1311,7 +1221,7 @@ class ChartPanel(tk.Frame):
             panel.show_sp_autotune = bool(viewer_cfg.get("show_sp_autotune", panel.show_sp_autotune))
             panel.show_mae = bool(viewer_cfg.get("show_mae", panel.show_mae))
             panel._update_zone_header()
-            panel._update_plot()
+            panel._request_render()
 
         if self.zone_panels:
             self._update_title(max(panel.history_hours for panel in self.zone_panels))
@@ -1320,8 +1230,13 @@ class ChartPanel(tk.Frame):
         if not isinstance(cfg, dict):
             return
         self.apply_zone_names(_normalize_zone_names(cfg.get("zone_names", {})))
+
+    def shutdown_render_pool(self):
+        """Explicitly tear down the render worker process. Call before the GUI closes."""
+        self.render_pool.shutdown()
     
     def destroy(self):
         """Clean up all zone panels when container is destroyed."""
         self.stop_auto_refresh()
+        self.render_pool.shutdown()
         super().destroy()

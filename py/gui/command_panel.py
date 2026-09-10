@@ -88,6 +88,7 @@ class CommandPanel(StatePanel):
         self.sp_abs_entry = ttk.Entry(self.command_card, textvariable=self.sp_abs_var, width=14)
         self.sp_abs_entry.grid(row=1, column=1, sticky="w", pady=4)
         self.sp_abs_entry.bind("<KeyRelease>", self._on_form_edited)
+        self.sp_abs_entry.bind("<FocusIn>", self._select_all_on_focus)
 
         ttk.Label(self.command_card, text="Mode:").grid(row=1, column=2, sticky="e", padx=(12, 6), pady=4)
         self.mode_combo = ttk.Combobox(
@@ -104,6 +105,7 @@ class CommandPanel(StatePanel):
         self.sp_autotune_entry = ttk.Entry(self.command_card, textvariable=self.sp_autotune_var, width=14)
         self.sp_autotune_entry.grid(row=2, column=1, sticky="w", pady=4)
         self.sp_autotune_entry.bind("<KeyRelease>", self._on_form_edited)
+        self.sp_autotune_entry.bind("<FocusIn>", self._select_all_on_focus)
 
         self.apply_button = tk.Button(
             self.command_card,
@@ -136,6 +138,14 @@ class CommandPanel(StatePanel):
     def _on_form_edited(self, _event=None):
         self._form_dirty = True
         self._set_status("Unsaved command edits", ok=True)
+
+    def _select_all_on_focus(self, event=None):
+        """Select existing text on focus so typing replaces it instead of inserting at cursor 0."""
+        widget = event.widget if event is not None else None
+        if widget is None:
+            return
+        widget.select_range(0, tk.END)
+        widget.icursor(tk.END)
 
     def _safe_float(self, value: str) -> Optional[float]:
         text = str(value).strip()
@@ -252,8 +262,14 @@ class CommandPanel(StatePanel):
             tokens.append(token)
             mapping[token] = zone_id
 
-        self._zone_token_to_id = mapping
-        self.zone_combo.configure(values=tokens)
+        # Only touch the combobox's values when the token list actually changed. Reconfiguring
+        # `values` on every refresh tick (even while the dropdown popdown may be open) can corrupt
+        # ttk Combobox's internal popdown state on Windows until the app is restarted.
+        if tokens != list(self.zone_combo.cget("values")):
+            self._zone_token_to_id = mapping
+            self.zone_combo.configure(values=tokens)
+        else:
+            self._zone_token_to_id = mapping
 
         if not tokens:
             self.zone_var.set("")
