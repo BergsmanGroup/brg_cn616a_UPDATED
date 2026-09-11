@@ -87,6 +87,21 @@ def main():
 
     sub.add_parser("get_run_status")
 
+    p = sub.add_parser("set_num_segments")
+    p.add_argument("--zone", type=int, required=True)
+    p.add_argument("--count", type=int, required=True, help="0-20; 0 disables Ramp/Soak")
+
+    p = sub.add_parser("set_start_profile")
+    p.add_argument("--zones", required=True, help="Comma list, e.g. 1,2,3")
+    p.add_argument("--enable", required=True, help="true/false")
+
+    p = sub.add_parser("set_rampsoak_segment")
+    p.add_argument("--zone", type=int, required=True)
+    p.add_argument("--segment", type=int, required=True, help="1-20")
+    p.add_argument("--setpoint", type=float, required=True, help="Segment setpoint (process units)")
+    p.add_argument("--slope", type=float, default=0.0, help="Segment slope (units/min); 0 = use --time instead")
+    p.add_argument("--time", type=float, default=0.0, help="Segment time (hours); ignored if --slope is nonzero")
+
     args = ap.parse_args()
     cid = uuid.uuid4().hex[:8]
 
@@ -189,6 +204,22 @@ def main():
 
     elif args.op == "get_run_status":
         msg = {"id": cid, "op": "get_run_status"}
+
+    elif args.op == "set_num_segments":
+        msg = {"id": cid, "op": "set_num_segments", "zone": args.zone, "count": args.count}
+
+    elif args.op == "set_start_profile":
+        zones = [int(x.strip()) for x in args.zones.split(",") if x.strip()]
+        enable = str(args.enable).strip().lower() in ("1", "true", "yes", "y", "on")
+        msg = {"id": cid, "op": "set_start_profile", "zones": zones, "enable": enable}
+
+    elif args.op == "set_rampsoak_segment":
+        msg = {
+            "id": cid, "op": "set_rampsoak_segments", "zone": args.zone,
+            "segments": {
+                str(args.segment): {"sp_c": args.setpoint, "slope_c_per_min": args.slope, "time_h": args.time},
+            },
+        }
 
     else:
         raise SystemExit("Unknown op")

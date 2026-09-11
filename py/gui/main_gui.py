@@ -98,6 +98,7 @@ class CN616AGUI:
         
         self.chart_panel = None  # lazy-loaded
         self.command_panel = None
+        self.rampsoak_panel = None
         self.chart_panel_initialized = False
         self.chart_available = False
         self.chart_disabled_reason = self._chart_disabled_reason()
@@ -208,6 +209,7 @@ class CN616AGUI:
         rampsoak_panel = RampSoakPanel(notebook, self.logs_dir, debug=self.debug)
         notebook.add(rampsoak_panel, text="Ramp/Soak")
         self.panels.append(rampsoak_panel)
+        self.rampsoak_panel = rampsoak_panel
         
         # Chart tab: placeholder frame (lazy-loaded on first click when supported)
         self.chart_panel_frame = ttk.Frame(notebook)
@@ -268,6 +270,9 @@ class CN616AGUI:
 
         if tab_text == "Telemetry" and self.command_panel is not None:
             self.command_panel.on_tab_selected()
+
+        if tab_text == "Ramp/Soak" and self.rampsoak_panel is not None:
+            self.rampsoak_panel.on_tab_selected()
 
         if not self.chart_available:
             return

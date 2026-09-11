@@ -1183,81 +1183,525 @@ class ConfigPanel(StatePanel):
 
 
 class RampSoakPanel(StatePanel):
-    """Display ramp/soak configuration."""
-    
+    """Ramp/Soak profile viewer and editor (CN616A manual Functions 74-79).
+
+    Lets the user pick a zone, choose Standard vs Ramp/Soak control mode,
+    set how many of the 20 segments are active, start/stop the profile, and
+    edit each segment's Setpoint / Slope / Time. The segment table and the
+    "Number of Segments" / control-mode controls are write-only from the
+    user's perspective: refresh() only ever repopulates them when there are
+    no unsaved local edits, so a periodic auto-refresh can never clobber an
+    in-progress edit (the same class of bug fixed in command_panel.py).
+    """
+
+    NUM_SEGMENT_ROWS = 20
+
+    _CONTROL_MODE_LABELS = {
+        "STANDARD_CONTROL": "Standard (no Ramp/Soak)",
+        "RAMP_SOAK_1_STOP": "Ramp/Soak - Stop at end",
+        "RAMP_SOAK_2_HOLD": "Ramp/Soak - Hold at end",
+    }
+    _CONTROL_MODE_WIRE = {v: k for k, v in _CONTROL_MODE_LABELS.items()}
+
     def __init__(self, parent, logs_dir: Path, debug: bool = False):
         super().__init__(parent, logs_dir, debug=debug)
+        self._latest_rampsoak_zones: Dict[str, Any] = {}
+        self._zone_token_to_id: Dict[str, str] = {}
+        self._segments_dirty = False
+        self._num_segments_dirty = False
+        self._control_mode_dirty = False
         self.create_widgets()
-    
+
     def create_widgets(self):
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=10, pady=10)
-        
         ttk.Label(header, text="Ramp/Soak Control", font=("Arial", 14, "bold")).pack(side=tk.LEFT)
-        
+
         self.info_label = ttk.Label(self, text="", font=("Arial", 9))
         self.info_label.pack(fill=tk.X, padx=10)
-        
-        self.content_label = ttk.Label(self, text="", justify=tk.LEFT, font=("Courier", 9))
-        self.content_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=10, anchor="nw")
-    
-    def refresh(self):
-        """Update ramp/soak display."""
+
+        help_text = (
+            "Each zone can run a Ramp/Soak profile of up to 20 segments. Segment 1 always ramps from "
+            "the current temperature to its Setpoint. To SOAK (hold a temperature), give a segment the "
+            "same Setpoint as the one before it, leave Slope at 0, and enter a Time. To RAMP, give a "
+            "different Setpoint and set either a Slope (rate) or a Time (duration) - if both are set, "
+            "Slope wins and Time is ignored. Editing a segment never affects one that is currently "
+            "running; changes take effect once the profile reaches that segment."
+        )
+        ttk.Label(self, text=help_text, wraplength=940, justify=tk.LEFT, foreground="#444444").pack(
+            fill=tk.X, padx=10, pady=(0, 8)
+        )
+
+        # ---- Zone selector + live status ----
+        status_card = ttk.LabelFrame(self, text="Zone & Live Status")
+        status_card.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        ttk.Label(status_card, text="Zone:").grid(row=0, column=0, sticky="e", padx=(8, 6), pady=6)
+        self.zone_var = tk.StringVar(value="")
+        self.zone_combo = ttk.Combobox(status_card, textvariable=self.zone_var, state="readonly", width=22, values=[])
+        self.zone_combo.grid(row=0, column=1, sticky="w", pady=6)
+        self.zone_combo.bind("<<ComboboxSelected>>", self._on_zone_selected)
+
+        self.status_label = ttk.Label(status_card, text="", foreground="gray", font=("Arial", 9))
+        self.status_label.grid(row=0, column=2, sticky="w", padx=(16, 8), pady=6)
+
+        self.live_status_label = ttk.Label(status_card, text="", font=("Arial", 9))
+        self.live_status_label.grid(row=1, column=0, columnspan=3, sticky="w", padx=(8, 6), pady=(0, 8))
+
+        # ---- Profile controls ----
+        controls_card = ttk.LabelFrame(self, text="Profile Controls")
+        controls_card.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        ttk.Label(controls_card, text="Control Mode:").grid(row=0, column=0, sticky="e", padx=(8, 6), pady=6)
+        self.control_mode_var = tk.StringVar(value=self._CONTROL_MODE_LABELS["STANDARD_CONTROL"])
+        self.control_mode_combo = ttk.Combobox(
+            controls_card, textvariable=self.control_mode_var, state="readonly", width=28,
+            values=list(self._CONTROL_MODE_LABELS.values()),
+        )
+        self.control_mode_combo.grid(row=0, column=1, sticky="w", pady=6)
+        self.control_mode_combo.bind("<<ComboboxSelected>>", self._on_control_mode_edited)
+        ttk.Button(controls_card, text="Apply Mode", command=self._on_apply_control_mode).grid(
+            row=0, column=2, sticky="w", padx=(6, 20), pady=6
+        )
+
+        ttk.Label(controls_card, text="Number of Segments (0-20):").grid(row=0, column=3, sticky="e", padx=(8, 6), pady=6)
+        self.num_segments_var = tk.StringVar(value="")
+        self.num_segments_entry = ttk.Entry(controls_card, textvariable=self.num_segments_var, width=6)
+        self.num_segments_entry.grid(row=0, column=4, sticky="w", pady=6)
+        self.num_segments_entry.bind("<KeyRelease>", self._on_num_segments_edited)
+        self.num_segments_entry.bind("<FocusIn>", self._select_all_on_focus)
+        ttk.Button(controls_card, text="Apply Count", command=self._on_apply_num_segments).grid(
+            row=0, column=5, sticky="w", padx=(6, 8), pady=6
+        )
+
+        button_row = ttk.Frame(controls_card)
+        button_row.grid(row=1, column=0, columnspan=6, sticky="w", padx=(8, 6), pady=(0, 8))
+        ttk.Button(button_row, text="Start Profile (this zone)",
+                   command=lambda: self._on_start_stop(True, all_zones=False)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(button_row, text="Stop Profile (this zone)",
+                   command=lambda: self._on_start_stop(False, all_zones=False)).pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Button(button_row, text="Start All Zones",
+                   command=lambda: self._on_start_stop(True, all_zones=True)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(button_row, text="Stop All Zones",
+                   command=lambda: self._on_start_stop(False, all_zones=True)).pack(side=tk.LEFT)
+
+        # ---- Segment table ----
+        table_card = ttk.LabelFrame(self, text="Segments")
+        table_card.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        table_toolbar = ttk.Frame(table_card)
+        table_toolbar.pack(fill=tk.X, padx=8, pady=(6, 4))
+        ttk.Button(table_toolbar, text="Reload From Controller", command=self._on_reload_from_controller).pack(side=tk.LEFT)
+        ttk.Button(table_toolbar, text="Save Segment Changes", command=self._on_save_segments).pack(side=tk.LEFT, padx=(8, 0))
+        self.table_status_label = ttk.Label(table_toolbar, text="", foreground="gray")
+        self.table_status_label.pack(side=tk.LEFT, padx=(16, 0))
+
+        canvas_frame = ttk.Frame(table_card)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        rows_canvas = tk.Canvas(canvas_frame, height=380)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=rows_canvas.yview)
+        rows_frame = ttk.Frame(rows_canvas)
+        rows_frame.bind("<Configure>", lambda e: rows_canvas.configure(scrollregion=rows_canvas.bbox("all")))
+        rows_canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+        rows_canvas.configure(yscrollcommand=scrollbar.set)
+        rows_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        col_header = ttk.Frame(rows_frame)
+        col_header.pack(fill=tk.X, pady=(0, 4))
+        for col_text, width in (("Seg", 4), ("Setpoint (\u00b0C)", 14), ("Slope (\u00b0C/min)", 14), ("Time (h)", 10), ("Type", 16)):
+            ttk.Label(col_header, text=col_text, font=("Arial", 9, "bold"), width=width, anchor="w").pack(side=tk.LEFT, padx=4)
+
+        self.segment_rows: List[Dict[str, Any]] = []
+        for seg_num in range(1, self.NUM_SEGMENT_ROWS + 1):
+            row_frame = ttk.Frame(rows_frame)
+            row_frame.pack(fill=tk.X, pady=1)
+
+            seg_label = ttk.Label(row_frame, text=str(seg_num), width=4, anchor="w")
+            seg_label.pack(side=tk.LEFT, padx=4)
+
+            sp_var = tk.StringVar(value="")
+            sp_entry = ttk.Entry(row_frame, textvariable=sp_var, width=14)
+            sp_entry.pack(side=tk.LEFT, padx=4)
+            sp_entry.bind("<KeyRelease>", self._on_segment_edited)
+            sp_entry.bind("<FocusIn>", self._select_all_on_focus)
+
+            slope_var = tk.StringVar(value="")
+            slope_entry = ttk.Entry(row_frame, textvariable=slope_var, width=14)
+            slope_entry.pack(side=tk.LEFT, padx=4)
+            slope_entry.bind("<KeyRelease>", self._on_segment_edited)
+            slope_entry.bind("<FocusIn>", self._select_all_on_focus)
+
+            time_var = tk.StringVar(value="")
+            time_entry = ttk.Entry(row_frame, textvariable=time_var, width=10)
+            time_entry.pack(side=tk.LEFT, padx=4)
+            time_entry.bind("<KeyRelease>", self._on_segment_edited)
+            time_entry.bind("<FocusIn>", self._select_all_on_focus)
+
+            type_label = ttk.Label(row_frame, text="", width=16, anchor="w", foreground="gray")
+            type_label.pack(side=tk.LEFT, padx=4)
+
+            self.segment_rows.append({
+                "seg_label": seg_label,
+                "sp_var": sp_var, "slope_var": slope_var, "time_var": time_var,
+                "sp_entry": sp_entry, "slope_entry": slope_entry, "time_entry": time_entry,
+                "type_label": type_label,
+            })
+
+    # -----------------------------
+    # Small shared helpers
+    # -----------------------------
+    def _select_all_on_focus(self, event=None):
+        widget = event.widget if event is not None else None
+        if widget is None:
+            return
+        widget.select_range(0, tk.END)
+        widget.icursor(tk.END)
+
+    def _safe_float(self, value: Any) -> Optional[float]:
+        text = str(value).strip()
+        if not text:
+            return None
         try:
-            state = get_rampsoak_state(self.logs_dir)
-            ts = state.get("ts")
-            rampsoak = state.get("rampsoak", {})
-            
-            self.info_label.config(text=f"Last update: {format_timestamp(ts)}")
-            
-            if not rampsoak:
-                self.content_label.config(text="No ramp/soak data available")
+            return float(text)
+        except ValueError:
+            return None
+
+    def _format_num(self, value: Any) -> str:
+        if isinstance(value, (int, float)):
+            return f"{float(value):.3f}".rstrip("0").rstrip(".")
+        return ""
+
+    def _safe_focus_get(self):
+        try:
+            return self.focus_get()
+        except Exception:
+            return None
+
+    def _set_status(self, message: str, *, ok: bool = True):
+        self.status_label.config(text=message, foreground=("green" if ok else "red"))
+
+    def _set_table_status(self, message: str, *, ok: bool = True):
+        self.table_status_label.config(text=message, foreground=("green" if ok else "red"))
+
+    def _get_command_endpoint(self) -> tuple[str, int]:
+        svc_state = get_service_config_state(self.logs_dir)
+        cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
+        host = str(cfg.get("last_tcp_host", "127.0.0.1") or "127.0.0.1")
+        try:
+            port = int(cfg.get("last_tcp_port", 8765) or 8765)
+        except Exception:
+            port = 8765
+        return host, port
+
+    def _send_command(self, op: str, **fields) -> Dict[str, Any]:
+        host, port = self._get_command_endpoint()
+        msg = {"id": uuid.uuid4().hex[:8], "op": op}
+        msg.update(fields)
+        data = (json.dumps(msg) + "\n").encode("utf-8")
+        with socket.create_connection((host, port), timeout=2.0) as s:
+            s.sendall(data)
+            s.settimeout(2.0)
+            resp = s.recv(65536).decode("utf-8", errors="ignore").strip()
+        return json.loads(resp) if resp else {"ok": False, "error": "empty response"}
+
+    def _selected_zone_id(self) -> Optional[str]:
+        token = self.zone_var.get().strip()
+        if not token:
+            return None
+        return self._zone_token_to_id.get(token)
+
+    # -----------------------------
+    # Zone selector + population
+    # -----------------------------
+    def _refresh_zone_selector(self, zone_names: Dict[str, str]):
+        zone_ids = sorted(
+            [str(z) for z in self._latest_rampsoak_zones.keys()] or [str(z) for z in range(1, 7)],
+            key=lambda x: int(x) if str(x).isdigit() else 999,
+        )
+        tokens = []
+        mapping = {}
+        for zone_id in zone_ids:
+            token = f"{zone_id} - {zone_names.get(zone_id, f'Zone {zone_id}')}"
+            tokens.append(token)
+            mapping[token] = zone_id
+
+        # Only reconfigure when the token list actually changed - repeatedly reconfiguring a
+        # Combobox's values (even when unchanged) can corrupt its dropdown state on Windows.
+        if tokens != list(self.zone_combo.cget("values")):
+            self.zone_combo.configure(values=tokens)
+        self._zone_token_to_id = mapping
+
+        if not tokens:
+            return
+        if self.zone_var.get() not in mapping:
+            self.zone_var.set(tokens[0])
+            self._populate_for_zone(mapping[tokens[0]], force=True)
+
+    def _on_zone_selected(self, _event=None):
+        zone_id = self._selected_zone_id()
+        if zone_id:
+            self._segments_dirty = False
+            self._num_segments_dirty = False
+            self._control_mode_dirty = False
+            self._populate_for_zone(zone_id, force=True)
+            self._set_table_status("Zone changed, unsent edits discarded", ok=True)
+            self._update_live_status()
+
+    def _populate_for_zone(self, zone_id: str, *, force: bool = False):
+        zone_data = self._latest_rampsoak_zones.get(str(zone_id), {})
+        if not isinstance(zone_data, dict):
+            zone_data = {}
+
+        if not self._num_segments_dirty or force:
+            num_segments = zone_data.get("num_segments")
+            self.num_segments_var.set(str(int(num_segments)) if isinstance(num_segments, (int, float)) else "")
+
+        if not self._segments_dirty or force:
+            segments = zone_data.get("segments", {})
+            segments = segments if isinstance(segments, dict) else {}
+            for idx, row in enumerate(self.segment_rows):
+                seg = segments.get(str(idx + 1), {})
+                seg = seg if isinstance(seg, dict) else {}
+                row["sp_var"].set(self._format_num(seg.get("sp_c")))
+                row["slope_var"].set(self._format_num(seg.get("slope_c_per_min")))
+                row["time_var"].set(self._format_num(seg.get("time_h")))
+            self._segments_dirty = False
+
+        if force:
+            self._num_segments_dirty = False
+
+        self._refresh_type_hints()
+        self._apply_active_row_styling()
+
+    def _apply_active_row_styling(self):
+        count = self._safe_float(self.num_segments_var.get())
+        for idx, row in enumerate(self.segment_rows):
+            active = count is None or idx < int(count)
+            row["seg_label"].config(foreground=("black" if active else "gray"))
+
+    # -----------------------------
+    # Segment "Type" hint column (Ramp / Soak, read-only, computed locally)
+    # -----------------------------
+    def _segment_type_hint(self, idx: int, sp: Optional[float], slope: Optional[float],
+                            time_h: Optional[float], prev_sp: Optional[float]) -> str:
+        if sp is None:
+            return ""
+        if idx == 0:
+            return "Ramp (from PV)"
+        if prev_sp is not None and abs(sp - prev_sp) < 1e-9:
+            return "Soak"
+        if slope:
+            return "Ramp (by slope)"
+        if time_h:
+            return "Ramp (by time)"
+        return "Ramp"
+
+    def _refresh_type_hints(self):
+        prev_sp: Optional[float] = None
+        for idx, row in enumerate(self.segment_rows):
+            sp = self._safe_float(row["sp_var"].get())
+            slope = self._safe_float(row["slope_var"].get())
+            time_h = self._safe_float(row["time_var"].get())
+            row["type_label"].config(text=self._segment_type_hint(idx, sp, slope, time_h, prev_sp))
+            if sp is not None:
+                prev_sp = sp
+
+    # -----------------------------
+    # Live status (from telemetry - already polled independently of ramp/soak reads)
+    # -----------------------------
+    def _update_live_status(self):
+        zone_id = self._selected_zone_id()
+        if not zone_id:
+            self.live_status_label.config(text="")
+            return
+
+        telem = get_telemetry_state(self.logs_dir)
+        zones = ((telem or {}).get("telemetry", {}) or {}).get("zones", {})
+        zdata = zones.get(str(zone_id), {}) if isinstance(zones, dict) else {}
+
+        seg_idx = safe_get(zdata, "current_segment_index", default="N/A")
+        seg_state = safe_get(zdata, "current_segment_state", default="N/A")
+        control_mode = safe_get(zdata, "control_mode", default="N/A")
+        loop_status = safe_get(zdata, "loop_status", default="N/A")
+        remaining = safe_get(zdata, "ramp_soak_remaining", default=None)
+        remaining_txt = f"{float(remaining):.2f}\u00b0C" if isinstance(remaining, (int, float)) else "N/A"
+
+        self.live_status_label.config(
+            text=(f"Current Segment: {seg_idx} ({seg_state})    Control Mode: {control_mode}    "
+                  f"Loop Status: {loop_status}    Ramp/Soak Remaining: {remaining_txt}")
+        )
+
+        if not self._control_mode_dirty:
+            label = self._CONTROL_MODE_LABELS.get(str(control_mode).strip().upper())
+            if label:
+                self.control_mode_var.set(label)
+
+    # -----------------------------
+    # Edit tracking
+    # -----------------------------
+    def _on_segment_edited(self, _event=None):
+        self._segments_dirty = True
+        self._set_table_status("Unsaved segment edits", ok=True)
+        self._refresh_type_hints()
+
+    def _on_num_segments_edited(self, _event=None):
+        self._num_segments_dirty = True
+        self._set_status("Unsaved segment-count edit", ok=True)
+
+    def _on_control_mode_edited(self, _event=None):
+        self._control_mode_dirty = True
+
+    # -----------------------------
+    # Actions
+    # -----------------------------
+    def _on_apply_control_mode(self):
+        zone_id = self._selected_zone_id()
+        if not zone_id:
+            self._set_status("Select a zone first", ok=False)
+            return
+        wire = self._CONTROL_MODE_WIRE.get(self.control_mode_var.get())
+        if wire is None:
+            self._set_status("Choose a control mode first", ok=False)
+            return
+        try:
+            resp = self._send_command("set_control_mode", zone=int(zone_id), mode=wire)
+            if resp.get("ok"):
+                self._control_mode_dirty = False
+                self._set_status(f"Zone {zone_id} control mode updated", ok=True)
+            else:
+                self._set_status(f"Failed: {resp.get('error', 'unknown error')}", ok=False)
+        except Exception as e:
+            self._set_status(f"Service unreachable: {e}", ok=False)
+
+    def _on_apply_num_segments(self):
+        zone_id = self._selected_zone_id()
+        if not zone_id:
+            self._set_status("Select a zone first", ok=False)
+            return
+        count = self._safe_float(self.num_segments_var.get())
+        if count is None or count != int(count) or not (0 <= count <= 20):
+            self._set_status("Number of segments must be a whole number from 0 to 20", ok=False)
+            return
+        try:
+            resp = self._send_command("set_num_segments", zone=int(zone_id), count=int(count))
+            if resp.get("ok"):
+                self._num_segments_dirty = False
+                self._apply_active_row_styling()
+                self._set_status(f"Zone {zone_id} segment count set to {int(count)}", ok=True)
+            else:
+                self._set_status(f"Failed: {resp.get('error', 'unknown error')}", ok=False)
+        except Exception as e:
+            self._set_status(f"Service unreachable: {e}", ok=False)
+
+    def _on_start_stop(self, enable: bool, *, all_zones: bool):
+        if all_zones:
+            zones = sorted((int(z) for z in self._zone_token_to_id.values()), key=int) or list(range(1, 7))
+        else:
+            zone_id = self._selected_zone_id()
+            if not zone_id:
+                self._set_status("Select a zone first", ok=False)
                 return
-            
-            # Simple display: show structure
-            text = self._format_rampsoak(rampsoak)
-            self.content_label.config(text=text)
-        
-        except TypeError as e:
-            error_msg = f"Type Error - {str(e)}\n{traceback.format_exc()}"
-            print(f"[RampSoakPanel.refresh] {error_msg}")
-            LOGGER.exception("RampSoakPanel.refresh type error")
-            self.info_label.config(text=f"Error: {str(e)}")
-        except Exception as e:
-            error_msg = f"Error: {type(e).__name__} - {str(e)}\n{traceback.format_exc()}"
-            print(f"[RampSoakPanel.refresh] {error_msg}")
-            LOGGER.exception("RampSoakPanel.refresh failed")
-            self.info_label.config(text=f"Error: {str(e)}")
-
-
-    
-    def _format_rampsoak(self, rampsoak: Dict) -> str:
-        """Format ramp/soak data for display."""
+            zones = [int(zone_id)]
         try:
-            zones = rampsoak.get("zones", {})
-            
-            if not isinstance(zones, dict):
-                print(f"[_format_rampsoak] zones is not a dict: {type(zones)}")
-                return "Invalid ramp/soak data"
-            
-            if not zones:
-                return "No zones configured"
-            
-            lines = []
-            zone_names = _load_zone_names_from_logs(self.logs_dir)
-            for zone_id in sorted(zones.keys(), key=lambda x: int(str(x)) if str(x).isdigit() else 999):
-                try:
-                    zone_data = zones[zone_id]
-                    segments = zone_data.get("segments", []) if isinstance(zone_data, dict) else []
-                    zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
-                    lines.append(f"{zone_display}: {len(segments)} segments")
-                except Exception as e:
-                    print(f"[_format_rampsoak] Zone {zone_id} error: {e}")
-                    zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
-                    lines.append(f"{zone_display}: (error reading)")
-            
-            return "\n".join(lines)
+            resp = self._send_command("set_start_profile", zones=zones, enable=enable)
+            if resp.get("ok"):
+                action = "started" if enable else "stopped"
+                target = "all zones" if all_zones else f"zone {zones[0]}"
+                self._set_status(f"Ramp/Soak {action} for {target}", ok=True)
+            else:
+                self._set_status(f"Failed: {resp.get('error', 'unknown error')}", ok=False)
         except Exception as e:
-            print(f"[_format_rampsoak] FATAL ERROR: {type(e).__name__}: {e}")
-            print(f"[_format_rampsoak] Traceback: {traceback.format_exc()}")
-            return f"Error: {str(e)}"
+            self._set_status(f"Service unreachable: {e}", ok=False)
+
+    def _on_reload_from_controller(self):
+        try:
+            resp = self._send_command("read_rampsoak")
+        except Exception as e:
+            self._set_table_status(f"Service unreachable: {e}", ok=False)
+            return
+        if not resp.get("ok"):
+            self._set_table_status(f"Reload failed: {resp.get('error', 'unknown error')}", ok=False)
+            return
+
+        state = get_rampsoak_state(self.logs_dir)
+        zones = ((state or {}).get("rampsoak", {}) or {}).get("zones", {})
+        self._latest_rampsoak_zones = zones if isinstance(zones, dict) else {}
+
+        zone_id = self._selected_zone_id()
+        if zone_id:
+            self._segments_dirty = False
+            self._num_segments_dirty = False
+            self._populate_for_zone(zone_id, force=True)
+        self._set_table_status("Reloaded from controller", ok=True)
+
+    def _on_save_segments(self):
+        zone_id = self._selected_zone_id()
+        if not zone_id:
+            self._set_table_status("Select a zone first", ok=False)
+            return
+
+        segments: Dict[str, Dict[str, float]] = {}
+        for idx, row in enumerate(self.segment_rows):
+            sp = self._safe_float(row["sp_var"].get())
+            slope = self._safe_float(row["slope_var"].get())
+            time_h = self._safe_float(row["time_var"].get())
+            if sp is None and slope is None and time_h is None:
+                continue
+            segments[str(idx + 1)] = {
+                "sp_c": sp if sp is not None else 0.0,
+                "slope_c_per_min": slope if slope is not None else 0.0,
+                "time_h": time_h if time_h is not None else 0.0,
+            }
+
+        if not segments:
+            self._set_table_status("No segment values to save", ok=False)
+            return
+
+        try:
+            resp = self._send_command("set_rampsoak_segments", zone=int(zone_id), segments=segments)
+            if resp.get("ok"):
+                self._segments_dirty = False
+                self._set_table_status(f"Saved {len(segments)} segment(s) to zone {zone_id}", ok=True)
+            else:
+                self._set_table_status(f"Save failed: {resp.get('error', 'unknown error')}", ok=False)
+        except Exception as e:
+            self._set_table_status(f"Service unreachable: {e}", ok=False)
+
+    # -----------------------------
+    # Lifecycle hooks
+    # -----------------------------
+    def on_tab_selected(self):
+        """Called by main GUI when the Ramp/Soak tab is shown; forces a fresh controller read."""
+        try:
+            self._on_reload_from_controller()
+        except Exception:
+            LOGGER.exception("RampSoakPanel.on_tab_selected failed")
+
+    def refresh(self):
+        """Periodic refresh: updates live status and zone list; never overwrites unsaved edits."""
+        try:
+            focused = self._safe_focus_get()
+            if focused == self.zone_combo:
+                return
+
+            state = get_rampsoak_state(self.logs_dir)
+            ts = state.get("ts") if isinstance(state, dict) else None
+            rampsoak = state.get("rampsoak", {}) if isinstance(state, dict) else {}
+            zones = rampsoak.get("zones", {}) if isinstance(rampsoak, dict) else {}
+            self._latest_rampsoak_zones = zones if isinstance(zones, dict) else {}
+
+            if zones:
+                self.info_label.config(text=f"Last update: {format_timestamp(ts)}")
+            else:
+                self.info_label.config(text="No ramp/soak data yet - open this tab to fetch it from the controller")
+
+            zone_names = _load_zone_names_from_logs(self.logs_dir)
+            self._refresh_zone_selector(zone_names)
+
+            zone_id = self._selected_zone_id()
+            if zone_id:
+                self._populate_for_zone(zone_id, force=False)
+            self._update_live_status()
+        except Exception:
+            LOGGER.exception("RampSoakPanel.refresh failed")

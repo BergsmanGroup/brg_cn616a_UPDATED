@@ -1140,8 +1140,43 @@ class CN616AService:
                 changed = self.poll_rampsoak()
                 return {"id": cid, "ok": True, "changed": bool(changed), "zones_enabled": self.zones_enabled}
 
+            if op == "set_rampsoak_segments":
+                zone = int(cmd["zone"])
+                segments_raw = cmd.get("segments", {})
+                if not isinstance(segments_raw, dict) or not segments_raw:
+                    return {"id": cid, "ok": False, "error": "segments must be a non-empty object"}
+                segments = {int(seg_i): vals for seg_i, vals in segments_raw.items()}
+                self.ctl.write_rampsoak_profile(zone, segments)
+                self.poll_rampsoak()
+                return {"id": cid, "ok": True}
+
+            if op == "set_num_segments":
+                zone = int(cmd["zone"])
+                count = int(cmd["count"])
+                self.ctl.set_num_segments(zone, count)
+                self.poll_rampsoak()
+                return {"id": cid, "ok": True}
+
+            if op == "set_start_profile":
+                zones = cmd.get("zones", cmd.get("zone"))
+                enable = bool(cmd.get("enable", False))
+                self.ctl.set_start_profile(zones, enable)
+                self.poll_rampsoak()
+                return {"id": cid, "ok": True}
+
             # ---- "Start Run" mode ----
             if op == "start_run":
+                if self._run_schedule_enabled and self._run_schedule_stop_at is not None:
+                    if datetime.now(timezone.utc) >= self._run_schedule_stop_at:
+                        return {
+                            "id": cid, "ok": False,
+                            "error": (
+                                "Scheduled auto-stop time is already in the past "
+                                f"({self._run_schedule_stop_at.isoformat()}); update or disable the "
+                                "schedule before starting a run."
+                            ),
+                        }
+
                 run_dir_raw = cmd.get("run_dir")
                 if not run_dir_raw:
                     return {"id": cid, "ok": False, "error": "run_dir is required"}
@@ -1181,6 +1216,8 @@ class CN616AService:
                         return {"id": cid, "ok": False, "error": "stop_at_iso must be an ISO-8601 timestamp"}
                     if stop_at_dt.tzinfo is None:
                         return {"id": cid, "ok": False, "error": "stop_at_iso must include a UTC offset"}
+                    if stop_at_dt <= datetime.now(timezone.utc):
+                        return {"id": cid, "ok": False, "error": "stop_at_iso must be in the future"}
                 # Plain value swap: safe to call any number of times, whether a run is active or not,
                 # and safe to call again mid-run with a different time.
                 self._run_schedule_enabled = enabled

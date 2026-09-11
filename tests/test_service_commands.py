@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -51,7 +52,16 @@ class FakeCtl:
         return {"zones": {str(z): {"pv_c": 25.0, "sp_abs_c": 80.0} for z in zones}}
 
     def read_rampsoak_all(self, zones):
-        return {"zones": {str(z): {"segments": []} for z in zones}}
+        return {"zones": {str(z): {"num_segments": 1, "start_profile": "DISABLE", "segments": []} for z in zones}}
+
+    def write_rampsoak_profile(self, zone, segments):
+        self.last_call = ("write_rampsoak_profile", zone, segments)
+
+    def set_num_segments(self, zone, count):
+        self.last_call = ("set_num_segments", zone, count)
+
+    def set_start_profile(self, zones, enable):
+        self.last_call = ("set_start_profile", zones, enable)
 
 
 class ServiceCommandTests(unittest.TestCase):
@@ -162,9 +172,10 @@ class ServiceCommandTests(unittest.TestCase):
         resp = self.svc.handle_command({"id": "a", "op": "set_run_schedule", "enabled": True})
         self.assertFalse(resp["ok"])
 
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         resp2 = self.svc.handle_command({
             "id": "b", "op": "set_run_schedule", "enabled": True,
-            "stop_at_iso": "2026-09-08T18:30:00-07:00",
+            "stop_at_iso": future,
         })
         self.assertTrue(resp2["ok"])
         self.assertTrue(resp2["run_schedule_enabled"])
@@ -180,6 +191,52 @@ class ServiceCommandTests(unittest.TestCase):
             "stop_at_iso": "2026-09-08T18:30:00",
         })
         self.assertFalse(resp["ok"])
+
+    def test_set_run_schedule_rejects_past_time(self):
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        resp = self.svc.handle_command({
+            "id": "a", "op": "set_run_schedule", "enabled": True, "stop_at_iso": past,
+        })
+        self.assertFalse(resp["ok"])
+        self.assertIn("future", resp["error"])
+
+    def test_start_run_rejects_when_armed_schedule_is_stale(self):
+        # Simulate a schedule that was valid when set but whose time has since passed
+        # (e.g. armed yesterday, run not started until today) - bypass set_run_schedule's
+        # own future-time validation to reproduce that state directly.
+        self.svc._run_schedule_enabled = True
+        self.svc._run_schedule_stop_at = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        run_dir = Path(self.tmp.name) / "run_stale"
+        resp = self.svc.handle_command({"id": "a", "op": "start_run", "run_dir": str(run_dir)})
+        self.assertFalse(resp["ok"])
+        self.assertIn("past", resp["error"])
+        self.assertFalse(self.svc._run_active)
+
+    def test_set_rampsoak_segments_dispatches_to_controller(self):
+        resp = self.svc.handle_command({
+            "id": "a", "op": "set_rampsoak_segments", "zone": 2,
+            "segments": {"1": {"sp_c": 80.0, "slope_c_per_min": 5.0, "time_h": 0.0}},
+        })
+        self.assertTrue(resp["ok"])
+        op, zone, segments = self.svc.ctl.last_call
+        self.assertEqual(op, "write_rampsoak_profile")
+        self.assertEqual(zone, 2)
+        self.assertEqual(segments[1]["sp_c"], 80.0)
+
+    def test_set_rampsoak_segments_rejects_empty(self):
+        resp = self.svc.handle_command({"id": "a", "op": "set_rampsoak_segments", "zone": 1, "segments": {}})
+        self.assertFalse(resp["ok"])
+
+    def test_set_num_segments_dispatches_to_controller(self):
+        resp = self.svc.handle_command({"id": "a", "op": "set_num_segments", "zone": 3, "count": 5})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(self.svc.ctl.last_call, ("set_num_segments", 3, 5))
+
+    def test_set_start_profile_dispatches_to_controller(self):
+        resp = self.svc.handle_command({"id": "a", "op": "set_start_profile", "zones": [1, 2], "enable": True})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(self.svc.ctl.last_call, ("set_start_profile", [1, 2], True))
 
 
 if __name__ == "__main__":

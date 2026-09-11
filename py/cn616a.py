@@ -835,6 +835,19 @@ class CN616A:
             zkey = str(zi)
             segs: Dict[str, Any] = {}
 
+            num_segments = None
+            try:
+                num_segments = self.read_u16_addr(self.pid_addr(zi, "num_segments"))
+            except Exception:
+                num_segments = None
+
+            start_profile = None
+            try:
+                raw = self.read_u16_addr(self.pid_addr(zi, "start_profile"))
+                start_profile = self._enum_name("setting_toggle", raw) or raw
+            except Exception:
+                start_profile = None
+
             for s in segments:
                 si = int(s)
                 sp = None
@@ -859,7 +872,11 @@ class CN616A:
                     "time_h": _safe_float(th),
                 }
 
-            out["zones"][zkey] = {"segments": segs}
+            out["zones"][zkey] = {
+                "num_segments": num_segments,
+                "start_profile": start_profile,
+                "segments": segs,
+            }
 
         return out
 
@@ -949,6 +966,21 @@ class CN616A:
         inv = {v: k for k, v in self.enums.get("autotune_control", {}).items()}
         disable_val = inv.get("DISABLE", 0)
         self.write_u16_addr(self.pid_addr(int(zone), "autotune_enable"), int(disable_val))
+
+    def set_num_segments(self, zone: int, count: int) -> None:
+        """Function 74: number of active Ramp/Soak segments for a zone (0 disables Ramp/Soak)."""
+        count = int(count)
+        if not (0 <= count <= 20):
+            raise CN616AError("num_segments must be between 0 and 20")
+        self.write_u16_addr(self.pid_addr(int(zone), "num_segments"), count)
+
+    def set_start_profile(self, zones: Union[int, Sequence[int]], enable: bool) -> None:
+        """Function 79: start or stop the Ramp/Soak profile for one or more zones."""
+        z_list = [zones] if isinstance(zones, int) else [int(z) for z in zones]
+        inv = {v: k for k, v in self.enums.get("setting_toggle", {}).items()}
+        val = inv.get("ENABLE" if enable else "DISABLE", 1 if enable else 0)
+        for z in z_list:
+            self.write_u16_addr(self.pid_addr(int(z), "start_profile"), int(val))
 
     def write_rampsoak_profile(
         self,
