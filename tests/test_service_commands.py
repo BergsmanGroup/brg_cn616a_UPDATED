@@ -168,6 +168,33 @@ class ServiceCommandTests(unittest.TestCase):
         self.svc.poll_telemetry()
         self.assertTrue((run_dir / "cn616a_telemetry_log.jsonl").exists())
 
+    def test_active_run_recovers_after_service_shutdown(self):
+        run_dir = Path(self.tmp.name) / "recoverable_run"
+        self.svc.handle_command({"id": "a", "op": "start_run", "run_dir": str(run_dir)})
+        self.svc.poll_telemetry()
+        self.svc.close(service_shutdown=True)
+
+        recovered = CN616AService(
+            port="COM_TEST",
+            unit=1,
+            map_path=str(REPO_ROOT / "cn616a_register_map.json"),
+            out_dir=self.out_dir,
+            tcp_host="127.0.0.1",
+            tcp_port=8765,
+            cfg=ServiceConfig(),
+            verbose=False,
+        )
+        self.addCleanup(recovered.close)
+
+        status = recovered.handle_command({"id": "b", "op": "get_run_status"})
+        self.assertTrue(status["run_active"])
+        self.assertTrue(status["run_recovered"])
+        self.assertIsNotNone(status["run_last_data_ts"])
+        self.assertIsNotNone(status["run_interruption_s"])
+        self.assertEqual(status["run_dir"], str(run_dir))
+        recovered.poll_telemetry()
+        self.assertGreater((run_dir / "cn616a_telemetry_log.jsonl").stat().st_size, 0)
+
     def test_set_run_schedule_requires_stop_at_when_enabled(self):
         resp = self.svc.handle_command({"id": "a", "op": "set_run_schedule", "enabled": True})
         self.assertFalse(resp["ok"])

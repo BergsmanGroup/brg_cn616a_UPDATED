@@ -989,3 +989,13 @@ Current thread 0x000078c8 (most recent call first):
   File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 432 in <module>
 === GUI fault log session start: 2026-09-11T07:54:39.873633 ===
 === GUI fault log session start: 2026-09-11T09:28:32.417005 ===
+=== GUI fault log session start: 2026-10-31T15:23:28.797620 ===
+Windows fatal exception: code 0x80000003
+
+Current thread 0x00006134 (most recent call first):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1505 in mainloop
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 380 in run
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 425 in main
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\main_gui.py", line 432 in <module>
+=== GUI fault log session start: 2026-10-31T17:54:27.500554 ===
+=== GUI fault log session start: 2026-10-31T17:57:33.332565 ===

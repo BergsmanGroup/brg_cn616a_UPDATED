@@ -641,3 +641,96 @@ Traceback (most recent call last):
         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 _tkinter.TclError: Unspecified error
 2026-09-11 09:28:32,417 INFO [cn616a.gui] GUI runtime logging initialized
+2026-10-31 15:23:28,797 INFO [cn616a.gui] GUI runtime logging initialized
+2026-10-31 17:54:27,500 INFO [cn616a.gui] GUI runtime logging initialized
+2026-10-31 17:57:33,332 INFO [cn616a.gui] GUI runtime logging initialized
+2026-11-01 08:37:12,763 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\run_panel.py", line 142, in _on_browse
+    chosen = filedialog.askdirectory(title="Choose run log directory")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\filedialog.py", line 442, in askdirectory
+    return Directory(**options).show()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\commondialog.py", line 45, in show
+    s = master.tk.call(self.command, *master._options(self.options))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_tkinter.TclError: Unspecified error
+2026-11-01 08:37:29,309 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\run_panel.py", line 142, in _on_browse
+    chosen = filedialog.askdirectory(title="Choose run log directory")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\filedialog.py", line 442, in askdirectory
+    return Directory(**options).show()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\commondialog.py", line 45, in show
+    s = master.tk.call(self.command, *master._options(self.options))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_tkinter.TclError: Unspecified error
+2026-11-01 08:37:34,200 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\run_panel.py", line 142, in _on_browse
+    chosen = filedialog.askdirectory(title="Choose run log directory")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\filedialog.py", line 442, in askdirectory
+    return Directory(**options).show()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\commondialog.py", line 45, in show
+    s = master.tk.call(self.command, *master._options(self.options))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_tkinter.TclError: Unspecified error
+2026-11-01 08:37:42,794 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\run_panel.py", line 142, in _on_browse
+    chosen = filedialog.askdirectory(title="Choose run log directory")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\filedialog.py", line 442, in askdirectory
+    return Directory(**options).show()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\commondialog.py", line 45, in show
+    s = master.tk.call(self.command, *master._options(self.options))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_tkinter.TclError: Unspecified error
+2026-11-01 08:38:52,824 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\run_panel.py", line 142, in _on_browse
+    chosen = filedialog.askdirectory(title="Choose run log directory")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\filedialog.py", line 442, in askdirectory
+    return Directory(**options).show()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\commondialog.py", line 45, in show
+    s = master.tk.call(self.command, *master._options(self.options))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_tkinter.TclError: Unspecified error
+2026-11-01 08:38:54,216 CRITICAL [cn616a.gui] Tk callback exception
+Traceback (most recent call last):
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\Desktop\GitHub\brg_cn616a_UPDATED\py\gui\run_panel.py", line 142, in _on_browse
+    chosen = filedialog.askdirectory(title="Choose run log directory")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\filedialog.py", line 442, in askdirectory
+    return Directory(**options).show()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Owner\AppData\Local\Programs\Python\Python312\Lib\tkinter\commondialog.py", line 45, in show
+    s = master.tk.call(self.command, *master._options(self.options))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_tkinter.TclError: Unspecified error

@@ -339,12 +339,14 @@ class ServiceConfig:
     max_service_config_log_files: int = 10
     max_telemetry_log_bytes: int = 10_000_000
     max_telemetry_log_files: int = 10
+    telemetry_retention_s: float = 86_400.0
     max_config_log_bytes: int = 5_000_000
     max_config_log_files: int = 10
     max_rampsoak_log_bytes: int = 5_000_000
     max_rampsoak_log_files: int = 10
     max_analysis_log_bytes: int = 10_000_000
     max_analysis_log_files: int = 10
+    analysis_retention_s: float = 86_400.0
 
     # Viewer settings for GUI (history, colors, line width)
     viewer_history_hours: float = 1.0
@@ -386,12 +388,14 @@ class ServiceConfig:
             "max_service_config_log_files": self.max_service_config_log_files,
             "max_telemetry_log_bytes": self.max_telemetry_log_bytes,
             "max_telemetry_log_files": self.max_telemetry_log_files,
+            "telemetry_retention_s": self.telemetry_retention_s,
             "max_config_log_bytes": self.max_config_log_bytes,
             "max_config_log_files": self.max_config_log_files,
             "max_rampsoak_log_bytes": self.max_rampsoak_log_bytes,
             "max_rampsoak_log_files": self.max_rampsoak_log_files,
             "max_analysis_log_bytes": self.max_analysis_log_bytes,
             "max_analysis_log_files": self.max_analysis_log_files,
+            "analysis_retention_s": self.analysis_retention_s,
             "analysis_hz": self.analysis_hz,
             "gui_refresh_hz": self.gui_refresh_hz,
             "equilibrium_window_s": self.equilibrium_window_s,
@@ -445,9 +449,11 @@ class ServiceConfig:
                   "zones_mode", "zones_list", "zone_names", "flush_each_line",
                   "max_service_config_log_bytes", "max_service_config_log_files",
                   "max_telemetry_log_bytes", "max_telemetry_log_files",
+                  "telemetry_retention_s",
                   "max_config_log_bytes", "max_config_log_files",
                   "max_rampsoak_log_bytes", "max_rampsoak_log_files",
                   "max_analysis_log_bytes", "max_analysis_log_files",
+                  "analysis_retention_s",
                   "last_serial_port", "last_serial_params", "last_tcp_host", "last_tcp_port",
                   "viewer_history_hours", "viewer_line_width",
                   "viewer_pv_color", "viewer_sp_color", "viewer_sp_autotune_color",
@@ -487,12 +493,14 @@ class ServiceConfig:
         cfg.max_service_config_log_files = max(1, int(cfg.max_service_config_log_files))
         cfg.max_telemetry_log_bytes = int(cfg.max_telemetry_log_bytes)
         cfg.max_telemetry_log_files = max(1, int(cfg.max_telemetry_log_files))
+        cfg.telemetry_retention_s = max(0.0, float(cfg.telemetry_retention_s))
         cfg.max_config_log_bytes = int(cfg.max_config_log_bytes)
         cfg.max_config_log_files = max(1, int(cfg.max_config_log_files))
         cfg.max_rampsoak_log_bytes = int(cfg.max_rampsoak_log_bytes)
         cfg.max_rampsoak_log_files = max(1, int(cfg.max_rampsoak_log_files))
         cfg.max_analysis_log_bytes = int(cfg.max_analysis_log_bytes)
         cfg.max_analysis_log_files = max(1, int(cfg.max_analysis_log_files))
+        cfg.analysis_retention_s = max(0.0, float(cfg.analysis_retention_s))
         # ensure serial_params keys
         if not isinstance(cfg.last_serial_params, dict):
             cfg.last_serial_params = {}
@@ -550,6 +558,7 @@ class CN616AService:
 
         self.analysis_state_path = self.out_dir / "cn616a_analysis_state.json"
         self.analysis_log_path   = self.out_dir / "cn616a_analysis_log.jsonl"
+        self.active_run_state_path = self.out_dir / "cn616a_active_run_state.json"
         self._last_analysis_hash: Optional[str] = None
 
         # "Start Run" mode: mirrors log JSONL into a user-chosen directory for the duration of a run.
@@ -558,6 +567,11 @@ class CN616AService:
         self._run_name: str = ""
         self._run_started_ts: Optional[str] = None
         self._run_started_monotonic: Optional[float] = None
+        self._run_last_data_ts: Optional[str] = None
+        self._run_recovered: bool = False
+        self._run_interruption_s: Optional[float] = None
+        self._run_interruption_started_ts: Optional[str] = None
+        self._run_recovered_at_ts: Optional[str] = None
         # Scheduled auto-stop is a plain value compared every loop iteration (no timer/thread to
         # cancel), so toggling it or editing the target time mid-run is always safe.
         self._run_schedule_enabled: bool = False
@@ -586,6 +600,7 @@ class CN616AService:
         self.ctl = CN616A(port=self.port, unit=self.unit, register_map_path=self.map_path)
 
         # write initial service config snapshot + log
+        self._restore_active_run()
         self._log_service_config(event="startup", patch={})
 
     def _log_service_config(self, *, event: str, patch: dict, client: Optional[Tuple[str, int]] = None) -> None:
@@ -653,7 +668,9 @@ class CN616AService:
         if True: #always print this info
             print("[service] connected")
 
-    def close(self) -> None:
+    def close(self, *, service_shutdown: bool = False) -> None:
+        if service_shutdown and self._run_active:
+            self._persist_active_run(service_stopped_ts=now_iso_local_ms())
         try:
             self.ctl.close()
         except Exception:
@@ -982,6 +999,10 @@ class CN616AService:
             return
         try:
             append_jsonl(self._run_dir / filename, obj, flush_each_line=self.cfg.flush_each_line)
+            if filename == "cn616a_telemetry_log.jsonl":
+                self._run_last_data_ts = obj.get("ts") or self._run_last_data_ts
+                self._persist_active_run()
+                self._write_run_info(event="collecting")
         except Exception:
             LOGGER.exception("Failed mirroring %s into run directory %s", filename, self._run_dir)
 
@@ -994,6 +1015,11 @@ class CN616AService:
             "ts": now_iso_local_ms(),
             "run_name": self._run_name,
             "run_started_ts": self._run_started_ts,
+            "last_data_ts": self._run_last_data_ts,
+            "recovered": self._run_recovered,
+            "interruption_s": self._run_interruption_s,
+            "interruption_started_ts": self._run_interruption_started_ts,
+            "recovered_at_ts": self._run_recovered_at_ts,
             "unit": self.unit,
             "port": self.port,
             "zones_enabled": self.zones_enabled,
@@ -1004,6 +1030,62 @@ class CN616AService:
             atomic_write_json(self._run_dir / "cn616a_run_info.json", payload)
         except Exception:
             LOGGER.exception("Failed writing run info snapshot to %s", self._run_dir)
+
+    def _persist_active_run(self, *, service_stopped_ts: Optional[str] = None) -> None:
+        if not self._run_active or self._run_dir is None:
+            return
+        payload = {
+            "active": True,
+            "run_dir": str(self._run_dir),
+            "run_name": self._run_name,
+            "run_started_ts": self._run_started_ts,
+            "last_data_ts": self._run_last_data_ts,
+            "service_stopped_ts": service_stopped_ts,
+        }
+        try:
+            atomic_write_json(self.active_run_state_path, payload)
+        except Exception:
+            LOGGER.exception("Failed persisting active run recovery state")
+
+    def _restore_active_run(self) -> None:
+        if not self.active_run_state_path.exists():
+            return
+        try:
+            payload = json.loads(self.active_run_state_path.read_text(encoding="utf-8"))
+        except Exception:
+            LOGGER.exception("Failed reading active run recovery state")
+            return
+        if not isinstance(payload, dict) or not payload.get("active") or not payload.get("run_dir"):
+            return
+
+        run_dir = Path(str(payload["run_dir"]))
+        if not run_dir.exists():
+            LOGGER.warning("Discarding active run recovery state for missing directory %s", run_dir)
+            return
+
+        self._run_active = True
+        self._run_dir = run_dir
+        self._run_name = str(payload.get("run_name") or "")
+        self._run_started_ts = payload.get("run_started_ts")
+        self._run_started_monotonic = time.monotonic()
+        self._run_last_data_ts = payload.get("last_data_ts") or self._run_started_ts
+        self._run_recovered = True
+        self._run_recovered_at_ts = now_iso_local_ms()
+
+        try:
+            interrupted_at = datetime.fromisoformat(str(payload.get("service_stopped_ts")))
+            recovered_at = datetime.fromisoformat(self._run_recovered_at_ts)
+            if interrupted_at.tzinfo is None:
+                interrupted_at = interrupted_at.replace(tzinfo=timezone.utc)
+            if recovered_at.tzinfo is None:
+                recovered_at = recovered_at.replace(tzinfo=timezone.utc)
+            self._run_interruption_started_ts = interrupted_at.isoformat()
+            self._run_interruption_s = max(0.0, (recovered_at - interrupted_at).total_seconds())
+        except (TypeError, ValueError):
+            self._run_interruption_started_ts = payload.get("service_stopped_ts")
+            self._run_interruption_s = None
+
+        self._write_run_info(event="recovered")
 
     def _run_status_payload(self) -> dict:
         elapsed_s = None
@@ -1017,18 +1099,32 @@ class CN616AService:
             "run_elapsed_s": elapsed_s,
             "run_schedule_enabled": self._run_schedule_enabled,
             "run_schedule_stop_at": self._run_schedule_stop_at.isoformat() if self._run_schedule_stop_at else None,
+            "run_last_data_ts": self._run_last_data_ts,
+            "run_recovered": self._run_recovered,
+            "run_interruption_s": self._run_interruption_s,
+            "run_interruption_started_ts": self._run_interruption_started_ts,
+            "run_recovered_at_ts": self._run_recovered_at_ts,
         }
 
     def _do_stop_run(self, *, reason: str) -> None:
         if not self._run_active:
             return
         self._write_run_info(event="stopped", reason=reason)
+        try:
+            atomic_write_json(self.active_run_state_path, {"active": False, "stopped_ts": now_iso_local_ms()})
+        except Exception:
+            LOGGER.exception("Failed clearing active run recovery state")
         self._log_service_config(event="stop_run", patch={"reason": reason})
         self._run_active = False
         self._run_dir = None
         self._run_name = ""
         self._run_started_ts = None
         self._run_started_monotonic = None
+        self._run_last_data_ts = None
+        self._run_recovered = False
+        self._run_interruption_s = None
+        self._run_interruption_started_ts = None
+        self._run_recovered_at_ts = None
         # Schedule (enabled flag + target time) is left as configured so it can be reused by the
         # next run without the GUI needing to resend it.
 
@@ -1191,6 +1287,12 @@ class CN616AService:
                 self._run_name = str(cmd.get("run_name") or "").strip()
                 self._run_started_ts = now_iso_local_ms()
                 self._run_started_monotonic = time.monotonic()
+                self._run_last_data_ts = None
+                self._run_recovered = False
+                self._run_interruption_s = None
+                self._run_interruption_started_ts = None
+                self._run_recovered_at_ts = None
+                self._persist_active_run()
                 self._write_run_info(event="started")
                 self._log_service_config(
                     event="start_run",
@@ -1360,7 +1462,7 @@ class CN616AService:
             time.sleep(0.005)
 
         # Shutdown
-        self.close()
+        self.close(service_shutdown=True)
 
 
 # -----------------------------
@@ -1451,7 +1553,7 @@ def main() -> None:
             time.sleep(0.1)
         except Exception:
             pass
-        svc.close()
+        svc.close(service_shutdown=True)
     except Exception:
         logger.exception("Service terminated with unhandled exception")
         raise

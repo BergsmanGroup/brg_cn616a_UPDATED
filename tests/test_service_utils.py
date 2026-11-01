@@ -19,6 +19,7 @@ from cn616a_service import (  # noqa: E402
     load_persisted_service_config,
     stable_hash,
 )
+from gui.display_panels import estimate_log_storage, parse_retention_seconds  # noqa: E402
 
 
 class ServiceUtilsTests(unittest.TestCase):
@@ -90,6 +91,28 @@ class ServiceUtilsTests(unittest.TestCase):
         self.assertFalse(restored.viewer_show_mae)
         self.assertGreater(restored.max_telemetry_log_bytes, 0)
         self.assertGreaterEqual(restored.max_telemetry_log_files, 1)
+
+    def test_retention_settings_round_trip(self):
+        cfg = ServiceConfig(telemetry_retention_s=604800, analysis_retention_s=3600)
+        restored = ServiceConfig.from_dict(cfg.to_dict())
+        self.assertEqual(restored.telemetry_retention_s, 604800)
+        self.assertEqual(restored.analysis_retention_s, 3600)
+
+    def test_retention_duration_parser_and_storage_estimate(self):
+        self.assertEqual(parse_retention_seconds("1 week"), 604800)
+        self.assertEqual(parse_retention_seconds("30m"), 1800)
+        self.assertIsNone(parse_retention_seconds("forever"))
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            log = out / "telemetry.jsonl"
+            log.write_bytes(b'{"sample":1}\n{"sample":2}\n')
+            estimate = estimate_log_storage(out, log.name, 3600, 2, 100, 10)
+
+        self.assertEqual(estimate["records"], 7200)
+        self.assertEqual(estimate["average_record_bytes"], 13)
+        self.assertEqual(estimate["file_count"], 936)
+        self.assertEqual(estimate["capacity_bytes"], 93600)
 
     def test_from_dict_accepts_nested_viewer_and_zone_names_list(self):
         raw = {

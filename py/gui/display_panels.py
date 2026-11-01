@@ -15,6 +15,8 @@ import json
 import socket
 import uuid
 import logging
+import math
+import re
 from datetime import datetime
 
 from .state_reader import (
@@ -24,6 +26,68 @@ from .state_reader import (
 )
 
 LOGGER = logging.getLogger("cn616a.gui")
+
+
+def parse_retention_seconds(value: Any) -> Optional[float]:
+    """Parse a duration such as '1 week', '7d', or '168h'."""
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([a-z]*)", text)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    unit = match.group(2) or "h"
+    multipliers = {
+        "s": 1.0, "sec": 1.0, "secs": 1.0, "second": 1.0, "seconds": 1.0,
+        "m": 60.0, "min": 60.0, "mins": 60.0, "minute": 60.0, "minutes": 60.0,
+        "h": 3600.0, "hr": 3600.0, "hrs": 3600.0, "hour": 3600.0, "hours": 3600.0,
+        "d": 86_400.0, "day": 86_400.0, "days": 86_400.0,
+        "w": 604_800.0, "wk": 604_800.0, "week": 604_800.0, "weeks": 604_800.0,
+    }
+    multiplier = multipliers.get(unit)
+    return amount * multiplier if multiplier is not None and amount > 0 else None
+
+
+def estimate_log_storage(
+    logs_dir: Path,
+    log_name: str,
+    retention_s: Optional[float],
+    rate_hz: Optional[float],
+    max_bytes: Optional[int],
+    fallback_record_bytes: int,
+) -> Optional[Dict[str, Any]]:
+    """Estimate records, bytes, file count, and capacity for a retention setting."""
+    if retention_s is None or rate_hz is None or max_bytes is None:
+        return None
+    if retention_s <= 0 or rate_hz <= 0 or max_bytes <= 0:
+        return None
+
+    paths = sorted(logs_dir.glob(f"{Path(log_name).stem}_*{Path(log_name).suffix}"))
+    paths.append(logs_dir / log_name)
+    sizes = []
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            with path.open("rb") as stream:
+                for line in stream:
+                    if line.strip():
+                        sizes.append(len(line))
+        except OSError:
+            LOGGER.warning("Unable to read log size sample from %s", path)
+    average_record_bytes = (sum(sizes) / len(sizes)) if sizes else float(fallback_record_bytes)
+    records = retention_s * rate_hz
+    estimated_bytes = max(1, math.ceil(records * average_record_bytes))
+    file_count = max(1, math.ceil(estimated_bytes / max_bytes))
+    capacity_bytes = file_count * max_bytes
+    return {
+        "records": records,
+        "average_record_bytes": average_record_bytes,
+        "estimated_bytes": estimated_bytes,
+        "file_count": file_count,
+        "capacity_bytes": capacity_bytes,
+    }
 
 
 def _normalize_zone_names(raw: Any) -> Dict[str, str]:
@@ -554,20 +618,21 @@ class ConfigPanel(StatePanel):
         self.max_service_config_log_bytes = ttk.Entry(rotation_box, width=18)
         self.max_service_config_log_files = ttk.Entry(rotation_box, width=18)
         self.max_telemetry_log_bytes = ttk.Entry(rotation_box, width=18)
-        self.max_telemetry_log_files = ttk.Entry(rotation_box, width=18)
+        self.telemetry_retention = ttk.Entry(rotation_box, width=18)
         self.max_config_log_bytes = ttk.Entry(rotation_box, width=18)
         self.max_config_log_files = ttk.Entry(rotation_box, width=18)
         self.max_rampsoak_log_bytes = ttk.Entry(rotation_box, width=18)
         self.max_rampsoak_log_files = ttk.Entry(rotation_box, width=18)
         self.max_analysis_log_bytes = ttk.Entry(rotation_box, width=18)
-        self.max_analysis_log_files = ttk.Entry(rotation_box, width=18)
+        self.analysis_retention = ttk.Entry(rotation_box, width=18)
+        self.retention_estimate_label = ttk.Label(rotation_box, text="", justify=tk.LEFT, wraplength=900)
 
         rotation_rows = [
             ("Service config max bytes", self.max_service_config_log_bytes, "Service config max files", self.max_service_config_log_files),
-            ("Telemetry max bytes", self.max_telemetry_log_bytes, "Telemetry max files", self.max_telemetry_log_files),
+            ("Telemetry max file size", self.max_telemetry_log_bytes, "Telemetry retention duration", self.telemetry_retention),
             ("Config max bytes", self.max_config_log_bytes, "Config max files", self.max_config_log_files),
             ("Ramp/Soak max bytes", self.max_rampsoak_log_bytes, "Ramp/Soak max files", self.max_rampsoak_log_files),
-            ("Analysis max bytes", self.max_analysis_log_bytes, "Analysis max files", self.max_analysis_log_files),
+            ("Analysis max file size", self.max_analysis_log_bytes, "Analysis retention duration", self.analysis_retention),
         ]
         for row, (label_a, widget_a, label_b, widget_b) in enumerate(rotation_rows):
             ttk.Label(rotation_box, text=label_a + ":").grid(row=row, column=0, sticky="e", padx=(8, 8), pady=3)
@@ -578,6 +643,9 @@ class ConfigPanel(StatePanel):
             widget_a.bind("<FocusOut>", self._on_form_edited)
             widget_b.bind("<KeyRelease>", self._on_form_edited)
             widget_b.bind("<FocusOut>", self._on_form_edited)
+        self.retention_estimate_label.grid(
+            row=len(rotation_rows), column=0, columnspan=4, sticky="w", padx=8, pady=(4, 8)
+        )
 
         # ---- Zones section ----
         zones_box = ttk.LabelFrame(self.service_form_frame, text="Zones")
@@ -753,13 +821,14 @@ class ConfigPanel(StatePanel):
             self._set_entry_text(self.max_service_config_log_bytes, cfg.get("max_service_config_log_bytes", 2_000_000))
             self._set_entry_text(self.max_service_config_log_files, cfg.get("max_service_config_log_files", 10))
             self._set_entry_text(self.max_telemetry_log_bytes, cfg.get("max_telemetry_log_bytes", 10_000_000))
-            self._set_entry_text(self.max_telemetry_log_files, cfg.get("max_telemetry_log_files", 10))
+            self._set_entry_text(self.telemetry_retention, self._format_duration(cfg.get("telemetry_retention_s", 86_400.0)))
             self._set_entry_text(self.max_config_log_bytes, cfg.get("max_config_log_bytes", 5_000_000))
             self._set_entry_text(self.max_config_log_files, cfg.get("max_config_log_files", 10))
             self._set_entry_text(self.max_rampsoak_log_bytes, cfg.get("max_rampsoak_log_bytes", 5_000_000))
             self._set_entry_text(self.max_rampsoak_log_files, cfg.get("max_rampsoak_log_files", 10))
             self._set_entry_text(self.max_analysis_log_bytes, cfg.get("max_analysis_log_bytes", 10_000_000))
-            self._set_entry_text(self.max_analysis_log_files, cfg.get("max_analysis_log_files", 10))
+            self._set_entry_text(self.analysis_retention, self._format_duration(cfg.get("analysis_retention_s", 86_400.0)))
+            self._update_retention_estimate(cfg)
 
             zones_mode = str(cfg.get("zones_mode", "auto") or "auto")
             self.zones_mode_var.set("list" if zones_mode == "list" else "auto")
@@ -827,6 +896,58 @@ class ConfigPanel(StatePanel):
         except ValueError:
             return None
 
+    def _format_duration(self, seconds: Any) -> str:
+        try:
+            hours = float(seconds) / 3600.0
+        except (TypeError, ValueError):
+            hours = 24.0
+        return f"{hours:g} h"
+
+    def _update_retention_estimate(self, cfg: Optional[Dict[str, Any]] = None):
+        cfg = cfg or self._service_cfg_cache
+        zones = cfg.get("zones_list", [1, 2, 3, 4, 5, 6]) if cfg.get("zones_mode") == "list" else [1, 2, 3, 4, 5, 6]
+        zone_factor = max(1, len(zones)) / 6.0
+        telemetry = estimate_log_storage(
+            self.logs_dir,
+            "cn616a_telemetry_log.jsonl",
+            parse_retention_seconds(self.telemetry_retention.get()),
+            self._safe_float(self.polling_telemetry_hz.get()),
+            self._safe_int(self.max_telemetry_log_bytes.get()),
+            max(800, int(1600 * zone_factor)),
+        )
+        analysis = estimate_log_storage(
+            self.logs_dir,
+            "cn616a_analysis_log.jsonl",
+            parse_retention_seconds(self.analysis_retention.get()),
+            self._safe_float(self.polling_analysis_hz.get()),
+            self._safe_int(self.max_analysis_log_bytes.get()),
+            max(500, int(1000 * zone_factor)),
+        )
+        if telemetry and analysis:
+            self.retention_estimate_label.config(
+                text=(
+                    f"Estimated retention: telemetry {telemetry['file_count']} files, "
+                    f"~{self._format_bytes(telemetry['estimated_bytes'])} data "
+                    f"({self._format_bytes(telemetry['capacity_bytes'])} capacity); "
+                    f"analysis {analysis['file_count']} files, "
+                    f"~{self._format_bytes(analysis['estimated_bytes'])} data "
+                    f"({self._format_bytes(analysis['capacity_bytes'])} capacity). "
+                    "Analysis is an upper-bound estimate because only changed results are logged."
+                )
+            )
+        else:
+            self.retention_estimate_label.config(
+                text="Estimated retention: enter positive durations, polling rates, and file sizes."
+            )
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        size = float(value)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if size < 1024.0 or unit == "TB":
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+
     def _get_service_endpoint(self) -> tuple[str, int]:
         host = self.conn_tcp_host.get().strip() or "127.0.0.1"
         port = self._safe_int(self.conn_tcp_port.get())
@@ -853,6 +974,7 @@ class ConfigPanel(StatePanel):
             return
         self._form_dirty = True
         self.service_status_label.config(text="Unsaved changes", foreground="orange")
+        self._update_retention_estimate()
 
     def _apply_service_patch(self, patch: Dict[str, Any], *, notify_viewer: bool = False):
         if self._form_updating:
@@ -905,15 +1027,20 @@ class ConfigPanel(StatePanel):
             ("max_service_config_log_bytes", self.max_service_config_log_bytes.get()),
             ("max_service_config_log_files", self.max_service_config_log_files.get()),
             ("max_telemetry_log_bytes", self.max_telemetry_log_bytes.get()),
-            ("max_telemetry_log_files", self.max_telemetry_log_files.get()),
+            ("telemetry_retention_s", self.telemetry_retention.get()),
             ("max_config_log_bytes", self.max_config_log_bytes.get()),
             ("max_config_log_files", self.max_config_log_files.get()),
             ("max_rampsoak_log_bytes", self.max_rampsoak_log_bytes.get()),
             ("max_rampsoak_log_files", self.max_rampsoak_log_files.get()),
             ("max_analysis_log_bytes", self.max_analysis_log_bytes.get()),
-            ("max_analysis_log_files", self.max_analysis_log_files.get()),
+            ("analysis_retention_s", self.analysis_retention.get()),
         ]
         for key, value in pairs:
+            if key.endswith("_retention_s"):
+                seconds = parse_retention_seconds(value)
+                if seconds is not None:
+                    patch[key] = seconds
+                continue
             if key.endswith("_files"):
                 num = self._safe_int(value)
                 if num is not None:
@@ -922,6 +1049,26 @@ class ConfigPanel(StatePanel):
                 num = self._safe_int(value)
                 if num is not None:
                     patch[key] = max(1, num)
+        telemetry = estimate_log_storage(
+            self.logs_dir,
+            "cn616a_telemetry_log.jsonl",
+            parse_retention_seconds(self.telemetry_retention.get()),
+            self._safe_float(self.polling_telemetry_hz.get()),
+            self._safe_int(self.max_telemetry_log_bytes.get()),
+            1600,
+        )
+        if telemetry:
+            patch["max_telemetry_log_files"] = telemetry["file_count"]
+        analysis = estimate_log_storage(
+            self.logs_dir,
+            "cn616a_analysis_log.jsonl",
+            parse_retention_seconds(self.analysis_retention.get()),
+            self._safe_float(self.polling_analysis_hz.get()),
+            self._safe_int(self.max_analysis_log_bytes.get()),
+            1000,
+        )
+        if analysis:
+            patch["max_analysis_log_files"] = analysis["file_count"]
         return patch
 
     def _build_zones_patch(self) -> Dict[str, Any]:

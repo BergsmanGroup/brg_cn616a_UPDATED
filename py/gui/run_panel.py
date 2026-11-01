@@ -16,7 +16,7 @@ import logging
 import socket
 import uuid
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -60,11 +60,22 @@ def _format_schedule_display(iso_str: Optional[str]) -> str:
         return iso_str
 
 
+def _format_last_data_display(iso_str: Optional[str]) -> str:
+    if not iso_str:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(iso_str).astimezone(_pacific_tz())
+        return dt.strftime("%Y-%m-%d %I:%M:%S %p %Z")
+    except Exception:
+        return iso_str
+
+
 class RunPanel(StatePanel):
     """Start/stop a logging run mirrored into a custom directory, with optional scheduled auto-stop."""
 
     def __init__(self, parent, logs_dir: Path, debug: bool = False):
         super().__init__(parent, logs_dir, debug=debug)
+        self._recovery_notice_shown = False
         self._create_widgets()
 
     def _create_widgets(self):
@@ -250,6 +261,18 @@ class RunPanel(StatePanel):
                 elapsed = resp.get("run_elapsed_s")
                 elapsed_txt = _format_elapsed(elapsed) if isinstance(elapsed, (int, float)) else "?"
                 line1 = f"Run ACTIVE - dir: {resp.get('run_dir') or '?'} - elapsed: {elapsed_txt}"
+                if resp.get("run_recovered") and not self._recovery_notice_shown:
+                    self._recovery_notice_shown = True
+                    last_data_txt = _format_last_data_display(resp.get("run_last_data_ts"))
+                    messagebox.showwarning(
+                        "Run collection interrupted",
+                        (
+                            "A run was active when the service stopped unexpectedly or was closed.\n\n"
+                            f"Last recorded data: {last_data_txt}.\n"
+                            "The run has been resumed and collection is continuing."
+                        ),
+                        parent=self.winfo_toplevel(),
+                    )
             else:
                 line1 = "No run active"
 

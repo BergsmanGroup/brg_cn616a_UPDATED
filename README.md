@@ -309,6 +309,8 @@ Supported CLI service patches include telemetry, configuration, ramp/soak, and a
 | `equilibrium_window_s` | Analysis lookback window | `30.0` |
 | `equilibrium_threshold_c` | Maximum average absolute error | `0.25` |
 | `flush_each_line` | Flush each JSONL append | `true` |
+| `telemetry_retention_s` | User-facing telemetry retention duration; GUI derives file count | `86400` |
+| `analysis_retention_s` | User-facing analysis retention duration; GUI derives file count | `86400` |
 | `last_serial_port` | Last successful COM port | empty initially |
 | `last_serial_params` | Baud, parity, stop bits, byte size, timeout | 115200/N/1/8/1.0 |
 | `last_tcp_host`, `last_tcp_port` | Last service endpoint | empty/0 initially |
@@ -327,6 +329,12 @@ A runtime patch is persisted as a new service-config snapshot and log event. Con
 ## State files and logs
 
 All runtime outputs go to the service `--out-dir`, defaulting to repository `logs/`. State files are complete latest snapshots written atomically through a temporary file and `os.replace`. JSONL files are append-only records, rotated by size and pruned to the configured archive count.
+
+### Run recovery after service interruption
+
+When a run is active, the service persists `cn616a_active_run_state.json` in the service output directory. It records the run directory, start time, and timestamp of the latest telemetry record mirrored into that run. A normal service shutdown or a crash therefore leaves enough information for the next service instance to resume mirroring into the same run directory. An explicit `Stop Run` still closes the run and clears its recovery state.
+
+When the GUI reconnects to a service that recovered an active run, it displays a warning with the timestamp of the last recorded data, converted to Pacific time. This avoids presenting an inferred downtime interval as exact; the user can compare that timestamp with the current time or the next collected record. If the service crashed before it could write its shutdown marker, the run is still resumed and the last recorded data timestamp remains available.
 
 ### Latest-state snapshots
 
@@ -375,7 +383,17 @@ The service writes:
 - `cn616a_service_config_log.jsonl`: startup, connection, disconnection, and configuration events.
 - `cn616a_analysis_log.jsonl`: analysis changes only.
 
-The defaults in the current code are size thresholds of 10 MB for telemetry and analysis, 5 MB for config and ramp/soak, and 2 MB for service configuration, with up to 10 current/archive files per stream. The thresholds are configurable in `ServiceConfig`; they are not the multi-gigabyte values used by some older deployments.
+The defaults in the current code are size thresholds of 10 MB for telemetry and analysis, 5 MB for config and ramp/soak, and 2 MB for service configuration. The GUI exposes telemetry and analysis as a retention duration plus maximum file size; it estimates the required file count as:
+
+```text
+estimated records = retention seconds × polling Hz
+estimated data = estimated records × average JSONL record size
+file count = ceiling(estimated data / maximum file size)
+```
+
+The average record size is measured from existing log lines when available, with a conservative fallback for a new installation. Telemetry estimates use the telemetry polling rate. Analysis estimates use the analysis polling rate as an upper bound because analysis records are written only when the calculated result changes. The GUI also displays estimated data and worst-case capacity (`file count × maximum file size`).
+
+The derived file count is persisted as `max_telemetry_log_files` or `max_analysis_log_files`, while the requested duration is persisted separately. If polling frequency, enabled zones, or log shape changes materially, reapply the service settings to refresh the estimate.
 
 Rotation renames the active file with a timestamp such as `cn616a_telemetry_log_20260908_123456.jsonl` and removes the oldest archives beyond the configured limit.
 
