@@ -103,3 +103,27 @@ $env:CN616A_SERVICE_TCP_PORT = "8765"
 - If needed, rerun setup first: `.\bat\venv_setup.bat`.
 - `service_start.bat` and `gui_start.bat` now pause on startup errors so double-click launches do not instantly disappear.
 - `gui_start.bat` starts the service as a separate process; closing the GUI does not stop the service.
+
+## 5) Isolated responsiveness test
+
+On a test machine, without a controller or service:
+
+```powershell
+.\bat\responsiveness_test.bat --verify-data
+.\bat\responsiveness_test.bat
+```
+
+No arguments runs the quick comparison: one large-history chart-open session
+with normal fake service replies and one with delayed replies. Each session
+defaults to 30 seconds. Refined terminal metrics and a JSON report identify
+missed targets, insufficient sampling, slow callbacks and history-read
+amplification. This launcher **never calls `gui_start.bat` or starts a service**.
+
+```powershell
+.\bat\responsiveness_test.bat --matrix
+.\bat\responsiveness_test.bat --summarize C:\path\to\report.json
+```
+
+The verification and summary commands do not open a GUI or network listener.
+The test's immutable compressed wire reference and clone setup instructions
+are documented in [the fixture package](../tests/fixtures/cn616a-baseline-v1/README.md).

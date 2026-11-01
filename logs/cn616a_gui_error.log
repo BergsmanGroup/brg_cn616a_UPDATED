@@ -734,3 +734,4 @@ Traceback (most recent call last):
     s = master.tk.call(self.command, *master._options(self.options))
         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 _tkinter.TclError: Unspecified error
+2026-11-01 09:45:20,251 INFO [cn616a.gui] GUI runtime logging initialized

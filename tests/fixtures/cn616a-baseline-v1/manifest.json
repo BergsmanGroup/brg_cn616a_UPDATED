@@ -1,0 +1,11 @@
+{
+  "schema": "cn616a-modbus-rtu-reference-v1",
+  "reference_file": "modbus-reference.json.gz",
+  "archive_sha256": "178f1138625be2a640407458beda63d5d21142db438c530a65248d45bfefea07",
+  "content_sha256": "5343599678e20d26e2b330a5288222fc183d7e2b3dd7016e1c882852d647c5eb",
+  "archive_bytes": 3823,
+  "uncompressed_bytes": 33272,
+  "sample_count": 16,
+  "sample_period_ms": 500,
+  "provenance": "synthetic; not captured from a physical controller"
+}
