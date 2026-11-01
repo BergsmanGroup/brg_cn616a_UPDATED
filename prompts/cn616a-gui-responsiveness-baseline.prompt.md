@@ -72,12 +72,17 @@ compare the same workload later:
   report includes actual JSONL bytes/newline-delimited lines read by callback,
   not just the fixture's total file sizes.
 - Use `bat\responsiveness_test.bat` on a separate test machine for the
-  default quick chart-open normal/delayed comparison. Use `--verify-data`
-  for integrity/quantity checks and `--summarize <report.json>` for refined
+  default quick chart-open normal/delayed comparison. The only batch modes
+  are `quick` and `full`; full runs 24 chart/history/service combinations
+  at 60 seconds each. Use `tests\responsiveness.py verify-data`
+  for integrity/quantity checks and `tests\responsiveness.py summarize <report.json>` for refined
   metrics without opening a GUI or network. The launcher never starts the
   real service. The default duration is 30 seconds with up to 20 button
   samples; report insufficient samples explicitly, and increase duration
   when necessary. Do not bypass the chart safety guard.
+  Optional raw capture belongs to `tests\responsiveness.py capture`, not
+  the batch test modes. Never run capture during baseline work on the live
+  controller; it requires separately arranged exclusive access/downtime.
 - Retain [the v1 raw reference](../tests/fixtures/cn616a-baseline-v1/README.md)
   unchanged. It is a 3,823-byte gzip of CRC-valid **synthetic** Modbus RTU
   transactions and a frozen register map, not a physical capture or service

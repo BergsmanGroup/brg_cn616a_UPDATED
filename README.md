@@ -529,16 +529,24 @@ service):
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\bat\responsiveness_test.bat --verify-data
-.\bat\responsiveness_test.bat
+.\bat\responsiveness_test.bat quick
+.\bat\responsiveness_test.bat full
 ```
 
-No arguments to the launcher runs a **quick comparison**: large-history,
-chart-open sessions with normal and delayed fake service replies, 30 seconds
-each with up to 20 simulated button actions. The launcher never calls
+There are only two batch test options:
+
+- **quick** (also the no-argument default): two large-history, chart-open
+  sessions with normal and delayed fake service replies, 30 seconds each.
+- **full**: all 24 combinations of three chart states (unopened/open/hidden),
+  two history sizes (small/one hour), and four service modes
+  (normal/delayed/disconnected/error), 60 seconds each, roughly 25 minutes.
+
+Both request 20 simulated button actions per session. Full increases duration
+and coverage, not the number of distinct raw snapshots. The launcher never calls
 `gui_start.bat`, which would start the real service. Run from a terminal so
-results remain visible. On other platforms, invoke the Python runner with
-`--quick` using Python 3.12/Tk; full platform parity is not certified.
+results remain visible. Presets and data tools live in Python, not batch.
+On other platforms, invoke `tests\responsiveness.py quick` or `full` using
+Python 3.12/Tk; full platform parity is not certified.
 
 Terminal output highlights heartbeat p95/p99/max (targets <100/<250 ms),
 button feedback p95 (target <150 ms), sample counts, slowest application
@@ -546,22 +554,19 @@ callback, JSONL read amplification, startup, CPU and process peak RAM.
 Missing chart/data and insufficient sampling are explicitly marked rather
 than reported as success. Feedback means time to the next Tk idle opportunity,
 not a measured pixel repaint. The first two seconds of heartbeat samples are
-reported separately as warm-up in JSON. Increase `--duration-seconds` if fewer
-than 100 heartbeats or 20 button actions complete. Measurements include
+reported separately as warm-up in JSON. Use full for better sample coverage;
+very slow scenarios can still have insufficient samples. Measurements include
 instrumentation overhead; targets are workload/machine-specific.
 
-Select conditions explicitly, or run the 18 combinations of chart state,
-small/large history, and normal/delayed/disconnected fake service:
+Data tools are separate Python commands, not batch test flags:
 
 ```powershell
-.\.venv\Scripts\python.exe tests\gui_responsiveness_baseline.py --chart hidden --service-mode delayed
-.\bat\responsiveness_test.bat --matrix
-.\.venv\Scripts\python.exe tests\gui_responsiveness_baseline.py --service-mode error --log-size small
-.\bat\responsiveness_test.bat --summarize C:\path\to\report.json
+.\.venv\Scripts\python.exe tests\responsiveness.py verify-data
+.\.venv\Scripts\python.exe tests\responsiveness.py summarize C:\path\to\report.json
 ```
 
-`--verify-data` checks integrity, builds/measures the temporary workload, and
-reports compressed size **without a GUI or network**. `--summarize` prints
+`verify-data` checks integrity, builds/measures the temporary workload, and
+reports compressed size **without a GUI or network**. `summarize` prints
 refined metrics from an existing JSON report, also without a GUI or network.
 Both work even when Tk/Matplotlib GUI dependencies cannot be loaded (data
 verification still requires the driver dependencies). Chart runs respect the
@@ -592,14 +597,42 @@ to generate this controlled one-hour workload, not to represent every process
 trajectory or an hour of physical observations. Only the compressed seed and
 code belong in Git. The GUI reads locally generated **uncompressed** JSONL for
 meaningful performance timing. Exact expanded sizes may change with future
-adapters; `--verify-data` measures them. Report version 2 pins the input hash;
+adapters; `verify-data` measures them. Report version 2 pins the input hash;
 earlier reports used a different synthetic JSON workload and are not
 directly comparable.
 
+### Optional new raw reference (not part of quick/full)
+
+Raw capture is implemented in `tests\baseline_reference.py` and called through
+the testing entry point. It sends only unit-1 FC03 reads and stores actual
+response bytes with CRCs, relative sample times, the frozen register map,
+gzip compression and hash manifests. It never changes controller settings,
+starts/stops a service, or discovers a port from production settings.
+
+**Do not use it while the live service owns the controller.** Use a separate
+controller, or arrange downtime and manually stop its service first.
+`--controller-offline` explicitly acknowledges exclusive controller ownership;
+it does not stop anything. Serial defaults are 115200 baud, 8N1. Match the
+controller's baud rate explicitly if different. A busy port, timeout, exception
+response or invalid CRC fails capture rather than substituting synthetic data.
+
+```powershell
+.\.venv\Scripts\python.exe tests\responsiveness.py capture --port COM4 --controller-offline --duration-seconds 60 --output-dir tests\fixtures\cn616a-baseline-v2
+.\.venv\Scripts\python.exe tests\responsiveness.py quick --reference-dir tests\fixtures\cn616a-baseline-v2
+```
+
+The destination must be new; v1 is never overwritten. Capture is separate from
+the batch launcher and is never run automatically. It records config/profile
+registers once, followed by six-zone telemetry snapshots targeting 2 Hz (slower
+if reads take longer). This is not an exhaustive process/state recording.
+Replay uses captured values but fixed workload timestamps and a fake service,
+not physical response timing. New raw data files are Git-eligible; review,
+commit and push a new corpus before sharing it between machines.
+
 By default, the large fixture contains one hour of six-zone telemetry and
 analysis at 2 Hz, split across rotated JSONL files, with new synthetic records
-appended while the GUI runs. To include existing history, the optional
-`--copy-logs-from` argument copies recognized JSONL history into the temporary
+appended while the GUI runs. To include existing history, the internal runner's
+optional `--copy-logs-from` argument copies recognized JSONL history into the temporary
 fixture; the source directory remains read-only. JSON results are saved to a
 timestamped file in the OS temporary directory unless `--output` is supplied.
 The report includes GUI startup, event-loop and per-callback percentiles,
@@ -609,7 +642,7 @@ measurements when available. Hardware/controller latency is not measured. Use
 the existing test suite separately:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_gui_responsiveness_baseline.py"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test*responsiveness*.py"
 ```
 
 The tests cover:
@@ -623,6 +656,7 @@ The tests cover:
 | GUI/state reader | Safe JSON reads, zone-name normalization, and chart-version guard behavior |
 | Chart gaps | NaN insertion for time gaps in plotted histories |
 | GUI baseline infrastructure | Immutable raw input integrity/CRC, offline driver decoding, repeatable six-zone history, fake JSONL service, safe source-log copying, portable CLI and metric summaries |
+| Responsiveness presets/capture | Quick/full coverage, alternative corpus replay, exclusive-access acknowledgement, raw FC03 capture and serial failures using fake streams only |
 
 The hardware-facing driver is not exercised against a physical controller by this unit suite. Validate serial settings and controller behavior in a controlled environment before using write commands.
 

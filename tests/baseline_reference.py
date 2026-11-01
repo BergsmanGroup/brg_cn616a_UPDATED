@@ -11,9 +11,10 @@ import math
 import struct
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -135,6 +136,20 @@ def build_reference(destination: Path) -> dict[str, Any]:
         "static_transactions": static,
         "samples": samples,
     }
+    return save_reference(reference, destination)
+
+
+def save_reference(reference: dict[str, Any], destination: Path) -> dict[str, Any]:
+    """Persist a lossless reference without replacing an existing corpus."""
+    archive_path = destination / REFERENCE_FILE
+    manifest_path = destination / MANIFEST_FILE
+    if archive_path.exists() or manifest_path.exists():
+        raise FileExistsError("Reference already exists; create a new version instead")
+    for transaction in reference["static_transactions"]:
+        transaction_registers(transaction)
+    for sample in reference["samples"]:
+        for transaction in sample["transactions"]:
+            transaction_registers(transaction)
     content = json.dumps(reference, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     compressed_buffer = io.BytesIO()
     with gzip.GzipFile(fileobj=compressed_buffer, mode="wb", filename="", mtime=0, compresslevel=9) as stream:
@@ -147,14 +162,105 @@ def build_reference(destination: Path) -> dict[str, Any]:
         "content_sha256": hashlib.sha256(content).hexdigest(),
         "archive_bytes": len(compressed),
         "uncompressed_bytes": len(content),
-        "sample_count": len(samples),
-        "sample_period_ms": 500,
+        "sample_count": len(reference["samples"]),
+        "sample_period_ms": reference["sample_period_ms"],
         "provenance": reference["provenance"],
     }
     destination.mkdir(parents=True, exist_ok=True)
     archive_path.write_bytes(compressed)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
+
+
+class CaptureStream(Protocol):
+    def write(self, data: bytes) -> int: ...
+    def read(self, size: int) -> bytes: ...
+
+
+def capture_transaction(stream: CaptureStream, request_hex: str) -> dict[str, str]:
+    """Record actual FC03 response bytes; never reconstruct responses from values."""
+    request = bytes.fromhex(request_hex)
+    if len(request) != 8 or crc16(request[:-2]) != int.from_bytes(request[-2:], "little"):
+        raise ValueError("Invalid raw capture request framing or CRC")
+    unit, function, _, count = struct.unpack(">BBHH", request[:-2])
+    if unit != 1 or function != 3 or not 1 <= count <= 120:
+        raise ValueError("Raw capture permits only unit-1 FC03 reads")
+    if stream.write(request) != len(request):
+        raise RuntimeError("Incomplete raw capture request write")
+
+    def read_exact(size: int) -> bytes:
+        result = bytearray()
+        while len(result) < size:
+            chunk = stream.read(size - len(result))
+            if not chunk:
+                raise TimeoutError(f"Raw capture timed out reading {size} bytes (received {len(result)})")
+            result.extend(chunk)
+        return bytes(result)
+
+    header = read_exact(3)
+    if header[1] & 0x80:
+        response = header + read_exact(2)
+        raise RuntimeError(f"Controller returned Modbus exception: {response.hex()}")
+    if header[:2] != request[:2] or header[2] != int.from_bytes(request[4:6], "big") * 2:
+        raise ValueError(f"Unexpected raw capture response header: {header.hex()}")
+    transaction = {"request_hex": request.hex(), "response_hex": (header + read_exact(header[2] + 2)).hex()}
+    transaction_registers(transaction)
+    return transaction
+
+
+def capture_reference(
+    destination: Path, *, port: str, controller_offline: bool,
+    duration_seconds: float = 60.0, baudrate: int = 115200, timeout_seconds: float = 2.0,
+) -> dict[str, Any]:
+    """Read a unit-1 controller exclusively; never stop or reconfigure a service."""
+    if not controller_offline:
+        raise ValueError("Raw capture requires --controller-offline: stop the service yourself or use a separate controller")
+    if destination.exists():
+        raise FileExistsError("Capture destination must be a new directory; existing references are immutable")
+    if not port.strip() or baudrate <= 0:
+        raise ValueError("An explicit serial port and positive baud rate are required")
+    if not all(math.isfinite(value) and value > 0 for value in (duration_seconds, timeout_seconds)):
+        raise ValueError("Capture duration and timeout must be finite and positive")
+    import serial
+
+    template, _ = load_reference()
+    reference = {
+        **template,
+        "provenance": "physical unit-1 controller; read-only FC03 raw serial capture",
+        "static_transactions": [],
+        "samples": [],
+    }
+    frame_gap = max(3.5 * 10 / baudrate, 0.00175)
+    # No saved service settings or automatic port discovery are used.
+    with serial.Serial(
+        port=port, baudrate=baudrate, bytesize=8, parity="N", stopbits=1,
+        timeout=timeout_seconds, write_timeout=timeout_seconds, exclusive=True,
+    ) as stream:
+        def read_transaction(transaction: dict[str, str]) -> dict[str, str]:
+            captured = capture_transaction(stream, transaction["request_hex"])
+            time.sleep(frame_gap)
+            return captured
+
+        reference["static_transactions"] = [
+            read_transaction(transaction)
+            for transaction in template["static_transactions"]
+        ]
+        started = time.monotonic()
+        period = template["sample_period_ms"] / 1000.0
+        while time.monotonic() - started < duration_seconds:
+            sample_started = time.monotonic()
+            reference["samples"].append({
+                "elapsed_ms": round((sample_started - started) * 1000),
+                "transactions": [
+                    read_transaction(transaction)
+                    for transaction in template["samples"][0]["transactions"]
+                ],
+            })
+            time.sleep(max(0.0, period - (time.monotonic() - sample_started)))
+    if not reference["samples"]:
+        raise RuntimeError("Raw capture produced no complete telemetry snapshots")
+    destination.mkdir(parents=True, exist_ok=False)
+    return save_reference(reference, destination)
 
 
 def load_reference(directory: Path = REFERENCE_DIR) -> tuple[dict[str, Any], dict[str, Any]]:

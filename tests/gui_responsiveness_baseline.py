@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from baseline_reference import adapt_reference, load_reference  # noqa: E402
+from baseline_reference import REFERENCE_DIR, adapt_reference, load_reference  # noqa: E402
 
 if TYPE_CHECKING:
     import tkinter as tk
@@ -426,6 +426,7 @@ class SyntheticLogWriter:
         service_port: int,
         copy_logs_from: Optional[Path] = None,
         end_time: Optional[datetime] = None,
+        reference_dir: Path = REFERENCE_DIR,
     ):
         self.logs_dir = logs_dir
         self.sample_rate_hz = float(sample_rate_hz)
@@ -433,7 +434,7 @@ class SyntheticLogWriter:
         self.service_port = int(service_port)
         self.copy_logs_from = copy_logs_from
         self.end_time = end_time
-        self.reference = adapt_reference()
+        self.reference = adapt_reference(reference_dir)
         self.copied_files: list[str] = []
         self.generated_records = 0
         self._write_lock = threading.Lock()
@@ -1096,6 +1097,7 @@ def _run_scenario(
     growth_interval_seconds: float,
     copy_logs_from: Optional[Path],
     feedback_samples: int = 20,
+    reference_dir: Path = REFERENCE_DIR,
 ) -> dict[str, Any]:
     fake_service = LoopbackJsonlService(scenario.service_mode, delay_seconds)
     fake_service.start()
@@ -1108,6 +1110,7 @@ def _run_scenario(
                 duration_seconds=_scenario_duration(scenario.log_size, hours),
                 service_port=fake_service.port,
                 copy_logs_from=copy_logs_from,
+                reference_dir=reference_dir,
             )
             initial_inventory = fixture.file_inventory()
             result = _run_gui_scenario(
@@ -1265,6 +1268,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "a loopback-only fake service. Never starts the controller service."
         )
     )
+    parser.add_argument("--reference-dir", type=Path, default=REFERENCE_DIR, help="Versioned raw input corpus to replay offline.")
     parser.add_argument("--chart", choices=("unopened", "open", "hidden"), default="unopened")
     parser.add_argument("--log-size", choices=("small", "large"), default="large")
     parser.add_argument(
@@ -1276,7 +1280,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     scope.add_argument(
         "--matrix",
         action="store_true",
-        help="Run all chart/log-size/service-mode combinations (18 GUI sessions).",
+        help="Run all chart/log-size/service-mode combinations (24 GUI sessions).",
     )
     scope.add_argument("--quick", action="store_true", help="Compare large-history chart-open normal and delayed fake-service sessions.")
     scope.add_argument("--verify-data", action="store_true", help="Validate the immutable raw reference and measure workload/compression sizes without a GUI or network.")
@@ -1325,7 +1329,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             for chart, log_size, service_mode in itertools.product(
                 ("unopened", "open", "hidden"),
                 ("small", "large"),
-                ("normal", "delayed", "disconnected"),
+                ("normal", "delayed", "disconnected", "error"),
             )
         ]
     elif args.quick:
@@ -1335,7 +1339,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     report = {
         "report_version": 2,
-        "reference": load_reference()[1],
+        "reference": load_reference(args.reference_dir)[1],
         "workload_encoding": "Frozen raw Modbus input decoded by the current driver; temporary service/GUI JSON adapter.",
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "safety": {
@@ -1356,6 +1360,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 growth_interval_seconds=args.growth_interval_seconds,
                 copy_logs_from=args.copy_logs_from,
                 feedback_samples=args.feedback_samples,
+                reference_dir=args.reference_dir,
             )
             for scenario in scenarios
         ],

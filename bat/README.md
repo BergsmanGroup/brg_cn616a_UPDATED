@@ -109,20 +109,32 @@ $env:CN616A_SERVICE_TCP_PORT = "8765"
 On a test machine, without a controller or service:
 
 ```powershell
-.\bat\responsiveness_test.bat --verify-data
-.\bat\responsiveness_test.bat
+.\bat\responsiveness_test.bat quick
+.\bat\responsiveness_test.bat full
 ```
 
-No arguments runs the quick comparison: one large-history chart-open session
+These are the only batch options. No arguments runs the quick comparison: one large-history chart-open session
 with normal fake service replies and one with delayed replies. Each session
-defaults to 30 seconds. Refined terminal metrics and a JSON report identify
+lasts 30 seconds. Full runs 24 combinations of chart/history states and
+normal/delayed/disconnected/error replies, 60 seconds each (~25 minutes).
+The Python entry point `tests\responsiveness.py` defines both workloads;
+batch only selects the repository virtual environment and forwards the mode.
+Refined terminal metrics and a JSON report identify
 missed targets, insufficient sampling, slow callbacks and history-read
 amplification. This launcher **never calls `gui_start.bat` or starts a service**.
 
+Data verification, saved-report summaries and optional raw capture are Python
+commands, not batch flags:
+
 ```powershell
-.\bat\responsiveness_test.bat --matrix
-.\bat\responsiveness_test.bat --summarize C:\path\to\report.json
+.\.venv\Scripts\python.exe tests\responsiveness.py verify-data
+.\.venv\Scripts\python.exe tests\responsiveness.py summarize C:\path\to\report.json
+.\.venv\Scripts\python.exe tests\responsiveness.py capture --help
 ```
+
+Capture requires a separate controller or a manually stopped service,
+an explicit port, and `--controller-offline`. It is never run by quick/full.
+See the repository README for capture and versioned replay instructions.
 
 The verification and summary commands do not open a GUI or network listener.
 The test's immutable compressed wire reference and clone setup instructions

@@ -51,8 +51,8 @@ On another Windows machine with Python 3.12/Tk, from the repository root:
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\bat\responsiveness_test.bat --verify-data
-.\bat\responsiveness_test.bat
+.\.venv\Scripts\python.exe tests\responsiveness.py verify-data
+.\bat\responsiveness_test.bat quick
 ```
 
 The first check verifies data and reports exact expanded/compressed sizes
@@ -61,7 +61,16 @@ chart-open GUI sessions, with normal and delayed fake service replies.
 No controller, production logs, saved service settings, or running service
 is needed. The launcher never calls the service-starting GUI wrapper.
 
-Other platforms can invoke the Python runner directly with Python 3.12, Tk,
+Use `responsiveness_test.bat full` for all 24 chart/history/service combinations,
+60 seconds each (~25 minutes); no arguments defaults to quick.
+Other platforms can invoke `tests\responsiveness.py quick` or `full` with Python 3.12, Tk,
 and repository requirements; platform GUI/packaging parity is not certified.
-Use `--summarize <report.json>` to print an existing report without a GUI,
+Use `tests\responsiveness.py summarize <report.json>` to print an existing report without a GUI,
 network, or third-party dependency.
+
+`tests\responsiveness.py capture --help` documents optional physical raw capture.
+It requires an explicit port, a new version directory and confirmation that
+no service owns the controller. Never run it alongside the live service.
+It calls the capture implementation in `tests\baseline_reference.py`, does not
+change controller settings, and preserves v1. Replay a new corpus with
+`tests\responsiveness.py quick --reference-dir <new-version-directory>`.
