@@ -18,6 +18,7 @@ import argparse
 import sys
 import os
 import logging
+import math
 from logging.handlers import RotatingFileHandler
 import threading
 import faulthandler
@@ -63,12 +64,14 @@ try:
         from gui.display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
         from gui.command_panel import CommandPanel
         from gui.run_panel import RunPanel
-        from gui.state_reader import get_service_config_state
+        from gui.service_client import ServiceClient
+        from gui.snapshot_reader import StateSnapshotReader
     else:
         from .display_panels import TelemetryPanel, ConfigPanel, RampSoakPanel
         from .command_panel import CommandPanel
         from .run_panel import RunPanel
-        from .state_reader import get_service_config_state
+        from .service_client import ServiceClient
+        from .snapshot_reader import StateSnapshotReader
 except Exception:
     _setup_bootstrap_logging(_default_logs_dir()).exception("Failed to import GUI modules")
     raise
@@ -95,6 +98,11 @@ class CN616AGUI:
         self.root = tk.Tk()
         self.root.title("CN616A Display")
         self.root.geometry("900x700")
+        self.service_client = ServiceClient()
+        self.snapshot_reader = StateSnapshotReader(self.logs_dir)
+        self._service_result_poll_id = None
+        self._active_tab_text = "Telemetry"
+        self._initial_refresh_rate_applied = False
         
         self.chart_panel = None  # lazy-loaded
         self.command_panel = None
@@ -104,6 +112,9 @@ class CN616AGUI:
         self.chart_disabled_reason = self._chart_disabled_reason()
         
         self.panels = []
+        self.telemetry_panel = None
+        self.run_panel = None
+        self.config_panel = None
         self._create_ui()
         self._apply_initial_service_refresh_rate()
         self._start_refresh()
@@ -178,35 +189,65 @@ class CN616AGUI:
         # Notebook
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.notebook = notebook
         
         # Telemetry tab: read-only display panel + separate command panel module.
         telemetry_tab = ttk.Frame(notebook)
         notebook.add(telemetry_tab, text="Telemetry")
 
-        command_panel = CommandPanel(telemetry_tab, self.logs_dir, debug=self.debug)
+        command_panel = CommandPanel(
+            telemetry_tab,
+            self.logs_dir,
+            debug=self.debug,
+            service_client=self.service_client,
+            snapshot_reader=self.snapshot_reader,
+        )
         command_panel.pack(fill=tk.X, expand=False)
         self.command_panel = command_panel
 
-        telemetry_panel = TelemetryPanel(telemetry_tab, self.logs_dir, debug=self.debug)
+        telemetry_panel = TelemetryPanel(
+            telemetry_tab,
+            self.logs_dir,
+            debug=self.debug,
+            service_client=self.service_client,
+            snapshot_reader=self.snapshot_reader,
+        )
         telemetry_panel.pack(fill=tk.BOTH, expand=True)
 
         self.panels.append(command_panel)
         self.panels.append(telemetry_panel)
+        self.telemetry_panel = telemetry_panel
 
         # Run tab: "Start Run" mode (mirrors logs to a custom directory, optional scheduled stop)
-        run_panel = RunPanel(notebook, self.logs_dir, debug=self.debug)
+        run_panel = RunPanel(
+            notebook,
+            self.logs_dir,
+            debug=self.debug,
+            service_client=self.service_client,
+            snapshot_reader=self.snapshot_reader,
+        )
         notebook.add(run_panel, text="Run")
         self.panels.append(run_panel)
+        self.run_panel = run_panel
         
         # Config tab
         config_panel = ConfigPanel(notebook, self.logs_dir, debug=self.debug,
                                     on_viewer_config_changed=self._on_viewer_config_changed,
-                                    on_service_config_changed=self._on_service_config_changed)
+                                    on_service_config_changed=self._on_service_config_changed,
+                                    service_client=self.service_client,
+                                    snapshot_reader=self.snapshot_reader)
         notebook.add(config_panel, text="Configuration")
         self.panels.append(config_panel)
+        self.config_panel = config_panel
         
         # Ramp/Soak tab
-        rampsoak_panel = RampSoakPanel(notebook, self.logs_dir, debug=self.debug)
+        rampsoak_panel = RampSoakPanel(
+            notebook,
+            self.logs_dir,
+            debug=self.debug,
+            service_client=self.service_client,
+            snapshot_reader=self.snapshot_reader,
+        )
         notebook.add(rampsoak_panel, text="Ramp/Soak")
         self.panels.append(rampsoak_panel)
         self.rampsoak_panel = rampsoak_panel
@@ -243,45 +284,90 @@ class CN616AGUI:
 
     def _apply_initial_service_refresh_rate(self):
         """Load gui_refresh_hz from service config at startup and apply if valid."""
+        snapshot = self.snapshot_reader.snapshot("service_config")
+        if snapshot.error is not None:
+            return False
         try:
-            svc_state = get_service_config_state(self.logs_dir)
-            cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
+            cfg = snapshot.data.get("config", {}) if isinstance(snapshot.data, dict) else {}
             gui_refresh_hz = float(cfg.get("gui_refresh_hz", 0) or 0)
-            if gui_refresh_hz > 0:
-                self.refresh_interval = 1.0 / gui_refresh_hz
-                if hasattr(self, "refresh_label"):
-                    self.refresh_label.config(text=f"Refresh: {self.refresh_interval:.3f}s")
+            if math.isfinite(gui_refresh_hz) and gui_refresh_hz > 0:
+                new_interval_s = 1.0 / gui_refresh_hz
+                if new_interval_s != self.refresh_interval:
+                    self.refresh_interval = new_interval_s
+                    for panel in self.panels:
+                        if hasattr(panel, "auto_refresh_interval"):
+                            panel.auto_refresh_interval = new_interval_s
+                        if hasattr(panel, "refresh_interval"):
+                            panel.refresh_interval = new_interval_s
+                    self._set_active_tab(self._active_tab_text, restart=True)
+                    if hasattr(self, "refresh_label"):
+                        self.refresh_label.config(text=f"Refresh: {self.refresh_interval:.3f}s")
+            return True
         except Exception:
             self.logger.exception("Failed to apply initial service refresh rate")
+            return True
     
     def _start_refresh(self):
-        """Start auto-refresh on all panels."""
+        """Start selected-panel refreshes and keep safety-relevant run polling active."""
+        self._schedule_service_result_poll()
+        self._set_active_tab(self._active_tab_text)
+
+    def _schedule_service_result_poll(self):
+        if self._service_result_poll_id is None:
+            self._service_result_poll_id = self.root.after(20, self._poll_service_results)
+
+    def _poll_service_results(self):
+        self._service_result_poll_id = None
+        try:
+            self.service_client.poll_results()
+        except Exception:
+            self.logger.exception("Failed polling asynchronous service results")
+        if not self._initial_refresh_rate_applied:
+            self._initial_refresh_rate_applied = self._apply_initial_service_refresh_rate()
+        self._schedule_service_result_poll()
+
+    def _set_active_tab(self, tab_text: str, *, restart: bool = False):
+        self._active_tab_text = tab_text
+        if tab_text == "Chart" and self.chart_available and not self.chart_panel_initialized:
+            self._initialize_chart_panel()
+            self.chart_panel_initialized = self.chart_panel is not None
+
+        panel_by_tab = {
+            "Telemetry": (self.command_panel, self.telemetry_panel),
+            "Run": (self.run_panel,),
+            "Configuration": (self.config_panel,),
+            "Ramp/Soak": (self.rampsoak_panel,),
+            "Chart": (self.chart_panel,) if self.chart_panel is not None else (),
+        }
+        selected_panels = set(panel for panel in panel_by_tab.get(tab_text, ()) if panel is not None)
         for panel in self.panels:
             if hasattr(panel, 'auto_refresh_interval'):
                 panel.auto_refresh_interval = self.refresh_interval
-            panel.start_auto_refresh()
-            panel.refresh()  # Initial refresh
-    
+            if hasattr(panel, "refresh_interval"):
+                panel.refresh_interval = self.refresh_interval
+            is_running = self._is_panel_running(panel)
+            should_run = panel is self.run_panel or panel in selected_panels
+            if should_run and (restart or not is_running):
+                if restart and is_running:
+                    panel.stop_auto_refresh()
+                panel.start_auto_refresh()
+            elif not should_run and is_running:
+                panel.stop_auto_refresh()
+
+    @staticmethod
+    def _is_panel_running(panel):
+        if hasattr(panel, "running"):
+            return bool(panel.running)
+        return getattr(panel, "_refresh_after_id", None) is not None
+
     def _on_notebook_tab_changed(self, event):
-        """Lazy-load chart panel when Chart tab is selected."""
-        # Check which tab is now active
+        """Refresh only visible panels while keeping run status/recovery polling active."""
         selected_tab = event.widget.select()
         tab_text = event.widget.tab(selected_tab, "text")
-
-        if tab_text == "Telemetry" and self.command_panel is not None:
-            self.command_panel.on_tab_selected()
+        self._set_active_tab(tab_text)
 
         if tab_text == "Ramp/Soak" and self.rampsoak_panel is not None:
             self.rampsoak_panel.on_tab_selected()
-
-        if not self.chart_available:
-            return
-        if self.chart_panel_initialized:
-            return  # Already loaded
-
-        if tab_text == "Chart":
-            self._initialize_chart_panel()
-            self.chart_panel_initialized = True
     
     def _chart_disabled_reason(self):
         """Return a message when chart should be disabled for runtime stability."""
@@ -314,7 +400,8 @@ class CN616AGUI:
             self.chart_panel_frame,
             self.logs_dir,
             refresh_interval=self.refresh_interval,
-            debug=False  # avoid debug spam from chart
+            debug=False,  # avoid debug spam from chart
+            snapshot_reader=self.snapshot_reader,
         )
         self.chart_panel.pack(fill=tk.BOTH, expand=True)
         self.panels.append(self.chart_panel)
@@ -334,7 +421,7 @@ class CN616AGUI:
         except Exception:
             self.logger.exception("Invalid gui_refresh_hz in service config: %r", cfg)
             return
-        if gui_refresh_hz <= 0:
+        if not math.isfinite(gui_refresh_hz) or gui_refresh_hz <= 0:
             return
 
         new_interval_s = 1.0 / gui_refresh_hz
@@ -346,23 +433,28 @@ class CN616AGUI:
                 panel.auto_refresh_interval = new_interval_s
             if hasattr(panel, "refresh_interval"):
                 panel.refresh_interval = new_interval_s
-            if hasattr(panel, "stop_auto_refresh") and hasattr(panel, "start_auto_refresh"):
-                panel.stop_auto_refresh()
-                panel.start_auto_refresh()
+        self._set_active_tab(self._active_tab_text, restart=True)
 
         if hasattr(self, "refresh_label"):
             self.refresh_label.config(text=f"Refresh: {new_interval_s:.3f}s")
     
     def _on_closing(self):
         """Clean up when window closes."""
+        if self._service_result_poll_id is not None:
+            try:
+                self.root.after_cancel(self._service_result_poll_id)
+            except tk.TclError:
+                self.logger.info("Service result timer was already canceled during shutdown")
+            self._service_result_poll_id = None
+
         for panel in self.panels:
             panel.stop_auto_refresh()
+            if hasattr(panel, "shutdown"):
+                panel.shutdown()
 
-        if self.chart_panel is not None and hasattr(self.chart_panel, "shutdown_render_pool"):
-            try:
-                self.chart_panel.shutdown_render_pool()
-            except Exception:
-                self.logger.exception("Failed shutting down chart render pool")
+        self.service_client.shutdown(wait=False)
+
+        self.snapshot_reader.shutdown()
 
         try:
             if hasattr(self, "_fault_log_fh") and self._fault_log_fh:

@@ -23,6 +23,9 @@ from zoneinfo import ZoneInfo
 import logging
 
 from .chart_render_pool import ChartRenderPool
+from .history_reader import IncrementalHistoryReader
+from .snapshot_reader import StateSnapshot, StateSnapshotReader
+from .state_values import get_field, get_numeric, get_zone, get_zones
 
 
 LOGGER = logging.getLogger("cn616a.gui")
@@ -57,11 +60,25 @@ def _normalize_zone_names(raw: Any) -> Dict[int, str]:
     return defaults
 
 
-def _load_zone_names(logs_dir: Path) -> Dict[int, str]:
-    from .state_reader import get_service_config_state
-    svc = get_service_config_state(logs_dir)
+def _load_zone_names_from_state(svc: Dict[str, Any]) -> Dict[int, str]:
     cfg = svc.get("config", {}) if isinstance(svc, dict) else {}
     return _normalize_zone_names(cfg.get("zone_names", {}))
+
+
+def _viewer_config_from_service_config(svc_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    viewer = svc_cfg.get("viewer", {})
+    if isinstance(viewer, dict) and viewer:
+        return dict(viewer)
+    return {
+        "history_hours": svc_cfg.get("viewer_history_hours", 1.0),
+        "line_width": svc_cfg.get("viewer_line_width", 2.5),
+        "pv_color": svc_cfg.get("viewer_pv_color", "blue"),
+        "sp_color": svc_cfg.get("viewer_sp_color", "red"),
+        "sp_autotune_color": svc_cfg.get("viewer_sp_autotune_color", "purple"),
+        "show_sp_abs": svc_cfg.get("viewer_show_sp_abs", True),
+        "show_sp_autotune": svc_cfg.get("viewer_show_sp_autotune", True),
+        "show_mae": svc_cfg.get("viewer_show_mae", True),
+    }
 
 
 def _iter_lines_reverse(file_path: Path, chunk_size: int = 65536):
@@ -92,17 +109,18 @@ def _iter_lines_reverse(file_path: Path, chunk_size: int = 65536):
 def _extract_zone_values(obj: Dict[str, Any], ts: datetime, zones_data: Dict[int, Dict[str, List[Any]]]) -> int:
     """Extract zone PV/SP values for one telemetry object. Returns points added count."""
     points_added = 0
-    zones = obj.get("data", {}).get("zones", {})
+    zones = get_zones(obj.get("data"))
     if not zones:
-        zones = obj.get("telemetry", {}).get("zones", {})
+        zones = get_zones(obj.get("telemetry"))
 
-    for zone_id_str in ["1", "2", "3", "4", "5", "6"]:
-        zone_id = int(zone_id_str)
-        zone_data = zones.get(zone_id_str, {})
+    for zone_id in range(1, 7):
+        zone_data = get_zone(zones, zone_id)
 
-        pv = zone_data.get("pv_c")
-        sp = zone_data.get("sp_abs_c") or zone_data.get("sp_abs")
-        sp_autotune = zone_data.get("autotune_sp_c") or zone_data.get("autotune_sp")
+        pv = get_numeric(zone_data, "pv_c", "pv", "PV", "process_value_c", "process_value")
+        sp = get_numeric(zone_data, "sp_abs_c", "sp_abs", "sp_c", "sp", "setpoint_c", "setpoint")
+        sp_autotune = get_numeric(
+            zone_data, "autotune_sp_c", "autotune_sp", "sp_autotune_c", "sp_autotune"
+        )
 
         if pv is not None or sp is not None or sp_autotune is not None:
             zones_data[zone_id]["times"].append(ts)
@@ -355,18 +373,13 @@ def _clone_analysis_data(analysis_data: Dict[int, Dict[str, List[Any]]]) -> Dict
 def _extract_analysis_zone_values(obj: Dict[str, Any], ts: datetime, analysis_data: Dict[int, Dict[str, List[Any]]]) -> int:
     """Extract per-zone MAE values for one analysis object. Returns points added count."""
     points_added = 0
-    zones = obj.get("analysis", {})
-    if not isinstance(zones, dict):
-        return 0
+    zones = get_zones(obj, "analysis")
 
     for zone_id in range(1, 7):
-        zone_obj = zones.get(str(zone_id), zones.get(zone_id, {}))
-        if not isinstance(zone_obj, dict):
-            continue
-        mae_val = zone_obj.get("avg_abs_error_c")
-        if isinstance(mae_val, (int, float)):
+        mae_val = get_numeric(get_zone(zones, zone_id), "avg_abs_error_c", "mae_c", "mae")
+        if mae_val is not None:
             analysis_data[zone_id]["times"].append(ts)
-            analysis_data[zone_id]["mae"].append(float(mae_val))
+            analysis_data[zone_id]["mae"].append(mae_val)
             points_added += 1
 
     return points_added
@@ -507,7 +520,8 @@ class ZoneChartPanel(tk.Frame):
                  viewer_cfg: Dict[str, Any],
                  render_pool: ChartRenderPool,
                  zone_name: Optional[str] = None,
-                 refresh_interval: float = 2.0, debug: bool = False):
+                 refresh_interval: float = 2.0, debug: bool = False,
+                 render_enabled: Optional[Callable[[], bool]] = None):
         super().__init__(parent)
         self.zone_id = zone_id
         self.zone_name = str(zone_name).strip() if zone_name else f"Zone {zone_id}"
@@ -515,6 +529,7 @@ class ZoneChartPanel(tk.Frame):
         self.refresh_interval = refresh_interval
         self.debug = debug
         self.render_pool = render_pool
+        self.render_enabled = render_enabled
         
         # viewer configuration defaults
         self.history_hours = viewer_cfg.get("history_hours", 1.0)
@@ -553,6 +568,7 @@ class ZoneChartPanel(tk.Frame):
         self._view_xlim: Optional[Tuple[datetime, datetime]] = None
         self._interaction_active = False
         self._pending_zone_data: Optional[Dict[str, List[Any]]] = None
+        self._render_revision = 0
 
         # Left-drag rubber-band zoom state
         self._zoom_drag_start_px: Optional[int] = None
@@ -563,13 +579,6 @@ class ZoneChartPanel(tk.Frame):
         
         self.create_widgets()
         
-        # Initial render
-        self.after(100, self._deferred_init)
-    
-    def _deferred_init(self):
-        """Deferred initialization to ensure widget is properly rendered."""
-        self._request_render()
-    
     def create_widgets(self):
         # Header
         header = ttk.Frame(self)
@@ -613,30 +622,8 @@ class ZoneChartPanel(tk.Frame):
         self.plot_canvas.bind("<MouseWheel>", self._on_mouse_wheel)
     
     def initial_load(self):
-        """Load telemetry data from logs for this zone. Applies clear cutoff if one exists."""
-        try:
-            all_zones_data = load_telemetry_points(self.logs_dir, time_window_hours=self.history_hours, debug=self.debug)
-            zone_data = all_zones_data[self.zone_id]
-            if self.clear_cutoff:
-                # filter out older points
-                filtered = {"times": [], "pv": [], "sp": [], "sp_autotune": []}
-                for t,p,s,sa in zip(zone_data["times"], zone_data["pv"], zone_data["sp"], zone_data.get("sp_autotune", [])):
-                    if t > self.clear_cutoff:
-                        filtered["times"].append(t)
-                        filtered["pv"].append(p)
-                        filtered["sp"].append(s)
-                        filtered["sp_autotune"].append(sa)
-                zone_data = filtered
-            self.zone_data = zone_data
-            self._request_render()
-            total_points = len(self.zone_data["times"])
-            self.status_label.config(text=f"Loaded {total_points} points")
-            if self.debug:
-                print(f"[ZoneChartPanel Zone {self.zone_id}] Initial load: {total_points} points")
-        except Exception as e:
-            self.status_label.config(text=f"Error: {str(e)}")
-            if self.debug:
-                print(f"[ZoneChartPanel.initial_load Z{self.zone_id}] {traceback.format_exc()}")
+        """Compatibility hook; parent ChartPanel owns asynchronous history loading."""
+        self._request_render()
     
     def start_auto_refresh(self):
         """Compatibility no-op: parent ChartPanel now drives refresh in main thread."""
@@ -661,6 +648,7 @@ class ZoneChartPanel(tk.Frame):
         name = str(zone_name).strip() if zone_name else ""
         self.zone_name = name or f"Zone {self.zone_id}"
         self._update_zone_header()
+        self._request_render()
 
     def set_mae_history(self, mae_history: Dict[str, List[Any]]):
         """Set MAE time-series history for this zone from analysis logs."""
@@ -686,20 +674,20 @@ class ZoneChartPanel(tk.Frame):
         if self.metrics_label is None:
             return
 
-        pv = zone_metrics.get("pv_c")
-        sp = zone_metrics.get("sp_abs") if zone_metrics.get("sp_abs") is not None else zone_metrics.get("sp_abs_c")
-        control_method = zone_metrics.get("control_method", "N/A")
-        autotune_enable = str(zone_metrics.get("autotune_enable", "N/A"))
-        autotune_sp = zone_metrics.get("autotune_sp")
-        p_gain = zone_metrics.get("p_gain")
-        i_gain = zone_metrics.get("i_gain")
-        d_gain = zone_metrics.get("d_gain")
+        pv = get_numeric(zone_metrics, "pv_c", "pv", "PV", "process_value_c", "process_value")
+        sp = get_numeric(zone_metrics, "sp_abs", "sp_abs_c", "sp_c", "sp", "setpoint_c", "setpoint")
+        control_method = get_field(zone_metrics, "control_method", "control_mode", "mode") or "N/A"
+        autotune_enable = str(get_field(zone_metrics, "autotune_enable", "autotune_enabled") or "N/A")
+        autotune_sp = get_numeric(zone_metrics, "autotune_sp", "autotune_sp_c", "sp_autotune", "sp_autotune_c")
+        p_gain = get_numeric(zone_metrics, "p_gain", "kp", "proportional_gain")
+        i_gain = get_numeric(zone_metrics, "i_gain", "ki", "integral_gain")
+        d_gain = get_numeric(zone_metrics, "d_gain", "kd", "derivative_gain")
 
         analysis_metrics = analysis_metrics or {}
-        in_equilibrium = analysis_metrics.get("in_equilibrium")
-        avg_error = analysis_metrics.get("avg_abs_error_c")
+        in_equilibrium = get_field(analysis_metrics, "in_equilibrium", "equilibrium")
+        avg_error = get_numeric(analysis_metrics, "avg_abs_error_c", "mae_c", "mae")
 
-        mae_value = float(avg_error) if isinstance(avg_error, (int, float)) else None
+        mae_value = avg_error
         self.current_mae = mae_value
 
         if mae_value is not None:
@@ -725,19 +713,22 @@ class ZoneChartPanel(tk.Frame):
             while mae_times and mae_times[0] < history_cutoff:
                 mae_times.pop(0)
                 mae_values.pop(0)
+            if len(mae_times) > 20_000:
+                del mae_times[:-20_000]
+                del mae_values[:-20_000]
 
-        pv_txt = f"{float(pv):.2f}°C" if isinstance(pv, (int, float)) else "N/A"
-        sp_txt = f"{float(sp):.2f}°C" if isinstance(sp, (int, float)) else "N/A"
+        pv_txt = f"{pv:.2f}°C" if pv is not None else "N/A"
+        sp_txt = f"{sp:.2f}°C" if sp is not None else "N/A"
         if autotune_enable.upper() == "ENABLE":
             at_state = "On"
         elif autotune_enable.upper() == "DISABLE":
             at_state = "Off"
         else:
             at_state = autotune_enable
-        at_sp_txt = f"{float(autotune_sp):.2f}°C" if isinstance(autotune_sp, (int, float)) else "N/A"
-        p_txt = f"{float(p_gain):.4f}" if isinstance(p_gain, (int, float)) else "N/A"
-        i_txt = f"{float(i_gain):.4f}" if isinstance(i_gain, (int, float)) else "N/A"
-        d_txt = f"{float(d_gain):.4f}" if isinstance(d_gain, (int, float)) else "N/A"
+        at_sp_txt = f"{autotune_sp:.2f}°C" if autotune_sp is not None else "N/A"
+        p_txt = f"{p_gain:.4f}" if p_gain is not None else "N/A"
+        i_txt = f"{i_gain:.4f}" if i_gain is not None else "N/A"
+        d_txt = f"{d_gain:.4f}" if d_gain is not None else "N/A"
 
         if in_equilibrium is True:
             eq_txt = "Yes"
@@ -745,7 +736,7 @@ class ZoneChartPanel(tk.Frame):
             eq_txt = "No"
         else:
             eq_txt = "N/A"
-        avg_err_txt = f"{float(avg_error):.3f}°C" if isinstance(avg_error, (int, float)) else "N/A"
+        avg_err_txt = f"{avg_error:.3f}°C" if avg_error is not None else "N/A"
 
         row1 = f"PV: {pv_txt}   SP: {sp_txt}   Equilibrium? {eq_txt}   MAE (|e|): {avg_err_txt}"
         row2 = f"Control: {control_method}   AT: {at_state} ({at_sp_txt})   P: {p_txt}   I: {i_txt}   D: {d_txt}"
@@ -753,7 +744,13 @@ class ZoneChartPanel(tk.Frame):
 
         # Do not force an immediate redraw from metrics updates; chart refresh loop handles plotting.
 
-    def set_zone_data(self, new_zone_data: Dict[str, List[Any]]):
+    def set_zone_data(
+        self,
+        new_zone_data: Dict[str, List[Any]],
+        *,
+        render: bool = True,
+        force: bool = False,
+    ):
         """Set new zone data and redraw only when changed."""
         try:
             # Clone so caller-owned cache structures are not mutated by clear filtering.
@@ -789,10 +786,11 @@ class ZoneChartPanel(tk.Frame):
                 copied_zone_data["sp_autotune"][-1] if copied_zone_data["sp_autotune"] else None,
             )
 
-            if signature != self._last_signature:
+            if force or signature != self._last_signature:
                 self._last_signature = signature
                 self.zone_data = copied_zone_data
-                self._request_render()
+                if render:
+                    self._request_render()
                 if self.debug and len(times) > 0:
                     print(f"[ZoneChartPanel.set_zone_data Z{self.zone_id}] {len(times)} points")
         
@@ -962,8 +960,10 @@ class ZoneChartPanel(tk.Frame):
     def _request_render(self):
         if self.render_pool is None or self.plot_canvas is None:
             return
-        width_px = max(50, int(self.plot_canvas.winfo_width()))
-        height_px = max(50, int(self.plot_canvas.winfo_height()))
+        if self.render_enabled is not None and not self.render_enabled():
+            return
+        width_px = min(1600, max(50, int(self.plot_canvas.winfo_width())))
+        height_px = min(1000, max(50, int(self.plot_canvas.winfo_height())))
 
         request = {
             "zone_name": self.zone_name,
@@ -987,10 +987,13 @@ class ZoneChartPanel(tk.Frame):
             "dpi": _RENDER_DPI,
             "tz_name": "America/Los_Angeles",
         }
-        self.render_pool.submit(self.zone_id, request)
+        self._render_revision += 1
+        self.render_pool.submit(self.zone_id, request, request_id=self._render_revision)
 
     def on_render_result(self, result: Dict[str, Any]):
         """Called by the owning ChartPanel when a render finishes for this zone."""
+        if result.get("request_id") != self._render_revision:
+            return
         if "error" in result:
             self.status_label.config(text=f"Chart render error: {result['error']}")
             LOGGER.error("Chart render failed for zone %s: %s", self.zone_id, result["error"])
@@ -1027,34 +1030,50 @@ class ZoneChartPanel(tk.Frame):
 class ChartPanel(tk.Frame):
     """Container for per-zone chart tabs with 1-hour rolling window."""
     
-    def __init__(self, parent, logs_dir: Path, refresh_interval: float = 2.0, debug: bool = False):
+    def __init__(
+        self,
+        parent,
+        logs_dir: Path,
+        refresh_interval: float = 2.0,
+        debug: bool = False,
+        snapshot_reader: Optional[StateSnapshotReader] = None,
+    ):
         super().__init__(parent)
         self.logs_dir = Path(logs_dir)
         self.refresh_interval = refresh_interval
         self.debug = debug
+        self.snapshot_reader = snapshot_reader or StateSnapshotReader(self.logs_dir)
+        self._owns_snapshot_reader = snapshot_reader is None
         
         # Zone panels
         self.zone_panels: List[ZoneChartPanel] = []
         self._zone_panel_by_id: Dict[int, ZoneChartPanel] = {}
         self._refresh_after_id: Optional[str] = None
         self._render_poll_after_id: Optional[str] = None
+        self._history_reader = IncrementalHistoryReader(self.logs_dir)
+        self._history_revision = 0
+        self._visible = False
+        self._shutdown = False
         self.title_label: Optional[ttk.Label] = None
+        self.history_status_label: Optional[ttk.Label] = None
         self.notebook: Optional[ttk.Notebook] = None
         self._zone_names: Dict[int, str] = {z: f"Zone {z}" for z in range(1, 7)}
+        self._service_config_signature: Optional[str] = None
 
         # One shared render worker process for all six zones; a native rendering crash
         # kills only this worker, never the GUI (see chart_render_pool.py).
         self.render_pool = ChartRenderPool()
         
         self.create_widgets()
-        
-        # Schedule initial load after widget is properly displayed
-        self.after(100, self._deferred_init)
-    
-    def _deferred_init(self):
-        """Deferred initialization to ensure widgets are properly rendered."""
-        self.refresh()
-        self.start_auto_refresh()
+
+    @staticmethod
+    def _snapshot_status(snapshot: StateSnapshot) -> str:
+        if snapshot.error:
+            return f"unavailable: {snapshot.error}"
+        if snapshot.age_s is None:
+            return "age unavailable"
+        age = max(0, int(snapshot.age_s))
+        return f"{'stale' if snapshot.stale else 'current'} ({age}s old)"
     
     def create_widgets(self):
         # Header
@@ -1063,28 +1082,18 @@ class ChartPanel(tk.Frame):
 
         self.title_label = ttk.Label(header, text="", font=("Arial", 14, "bold"))
         self.title_label.pack(side=tk.LEFT)
+        self.history_status_label = ttk.Label(self, text="Chart history loading…", foreground="gray", font=("Arial", 8))
+        self.history_status_label.pack(fill=tk.X, padx=10)
         
         # Sub-notebook for zones
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_zone_tab_changed)
         
-        # pull viewer settings from service config
-        from .state_reader import get_service_config_state
-        svc = get_service_config_state(self.logs_dir)
-        svc_cfg = svc.get("config", {})
+        snapshot = self.snapshot_reader.snapshot("service_config")
+        svc_cfg = snapshot.data.get("config", {}) if isinstance(snapshot.data, dict) else {}
         self._zone_names = _normalize_zone_names(svc_cfg.get("zone_names", {}))
-        viewer_cfg = svc_cfg.get("viewer", {})
-        if not viewer_cfg:
-            viewer_cfg = {
-                "history_hours": svc_cfg.get("viewer_history_hours", 1.0),
-                "line_width": svc_cfg.get("viewer_line_width", 2.5),
-                "pv_color": svc_cfg.get("viewer_pv_color", "blue"),
-                "sp_color": svc_cfg.get("viewer_sp_color", "red"),
-                "sp_autotune_color": svc_cfg.get("viewer_sp_autotune_color", "purple"),
-                "show_sp_abs": svc_cfg.get("viewer_show_sp_abs", True),
-                "show_sp_autotune": svc_cfg.get("viewer_show_sp_autotune", True),
-                "show_mae": svc_cfg.get("viewer_show_mae", True),
-            }
+        viewer_cfg = _viewer_config_from_service_config(svc_cfg)
         self._update_title(float(viewer_cfg.get("history_hours", 1.0) or 1.0))
 
         # Create a panel for each zone using the same viewer config
@@ -1095,7 +1104,8 @@ class ChartPanel(tk.Frame):
                 self.render_pool,
                 zone_name=self._zone_names.get(zone_id, f"Zone {zone_id}"),
                 refresh_interval=self.refresh_interval,
-                debug=self.debug
+                debug=self.debug,
+                render_enabled=lambda zone=zone_id: self._visible and self._selected_zone_id() == zone,
             )
             self.notebook.add(zone_panel, text=self._zone_names.get(zone_id, f"Zone {zone_id}"))
             self.zone_panels.append(zone_panel)
@@ -1125,85 +1135,162 @@ class ChartPanel(tk.Frame):
     
     def start_auto_refresh(self):
         """Start one main-thread refresh loop for all zone panels."""
+        if self._shutdown:
+            return
+        self._visible = True
+        self._history_reader.set_active(True)
         if self._refresh_after_id is not None:
             return
         for panel in self.zone_panels:
             panel.start_auto_refresh()
+        self.refresh()
+        selected_panel = self._selected_zone_panel()
+        if selected_panel is not None:
+            selected_panel._request_render()
         self._schedule_next_refresh()
         self._schedule_render_poll()
 
     def _schedule_next_refresh(self):
+        if not self._visible:
+            return
         interval_ms = max(100, int(self.refresh_interval * 1000))
         self._refresh_after_id = self.after(interval_ms, self._refresh_tick)
 
     def _refresh_tick(self):
         self._refresh_after_id = None
+        if not self._visible:
+            return
         self.refresh()
         if any(panel.running for panel in self.zone_panels):
             self._schedule_next_refresh()
 
     def _schedule_render_poll(self):
+        if not self._visible:
+            return
         # Polled on a short, fixed cadence independent of the (often slower) data refresh
         # interval, so zoom/pan/scroll interactions feel responsive.
         self._render_poll_after_id = self.after(100, self._render_poll_tick)
 
     def _render_poll_tick(self):
         self._render_poll_after_id = None
+        if not self._visible:
+            return
         if self.render_pool.is_broken():
             self.render_pool.restart()
+        selected_panel = self._selected_zone_panel()
         for zone_id, result in self.render_pool.poll_results():
             panel = self._zone_panel_by_id.get(zone_id)
-            if panel is not None:
+            if panel is selected_panel:
                 panel.on_render_result(result)
-        if self._refresh_after_id is not None or any(panel.running for panel in self.zone_panels):
+        if self._visible and (self._refresh_after_id is not None or any(panel.running for panel in self.zone_panels)):
             self._schedule_render_poll()
-    
-    def refresh(self):
-        """Refresh all zone panels."""
+
+    def _selected_zone_panel(self) -> Optional[ZoneChartPanel]:
+        if self.notebook is None or not self.zone_panels:
+            return None
         try:
-            self.apply_zone_names(_load_zone_names(self.logs_dir))
+            index = self.notebook.index("current")
+            return self.zone_panels[index]
+        except (tk.TclError, IndexError):
+            return None
 
-            # Load all zones once; distribute to zone tabs.
-            all_zones_data = load_telemetry_points(
-                self.logs_dir,
-                time_window_hours=max(panel.history_hours for panel in self.zone_panels) if self.zone_panels else 1.0,
-                debug=False,
-            )
-            all_analysis_data = load_analysis_points(
-                self.logs_dir,
-                time_window_hours=max(panel.history_hours for panel in self.zone_panels) if self.zone_panels else 1.0,
-                debug=False,
-            )
+    def _selected_zone_id(self) -> Optional[int]:
+        panel = self._selected_zone_panel()
+        return panel.zone_id if panel is not None else None
 
-            from .state_reader import get_telemetry_state, get_analysis_state
-            telem_state = get_telemetry_state(self.logs_dir)
-            telem_zones = (((telem_state or {}).get("telemetry", {}) or {}).get("zones", {}) or {})
-            analysis_state = get_analysis_state(self.logs_dir)
-            analysis_zones = ((analysis_state or {}).get("analysis", {}) or {})
+    def _on_zone_tab_changed(self, _event=None):
+        panel = self._selected_zone_panel()
+        if self._visible and panel is not None:
+            panel._request_render()
+
+    def refresh(self):
+        """Poll shared snapshots and apply bounded incremental history results."""
+        try:
+            telemetry_snapshot = self.snapshot_reader.snapshot("telemetry")
+            analysis_snapshot = self.snapshot_reader.snapshot("analysis")
+            service_snapshot = self.snapshot_reader.snapshot("service_config")
+            telem_state = telemetry_snapshot.data or {}
+            telem_zones = get_zones(telem_state, "telemetry")
+            analysis_state = analysis_snapshot.data or {}
+            analysis_zones = get_zones(analysis_state, "analysis")
+
+            svc_state = service_snapshot.data or {}
+            svc_cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
+            if service_snapshot.error is None:
+                self.apply_zone_names(_load_zone_names_from_state(svc_state))
+                config_signature = json.dumps(svc_cfg, sort_keys=True, default=str)
+                if config_signature != self._service_config_signature:
+                    self._service_config_signature = config_signature
+                    self.apply_viewer_config(_viewer_config_from_service_config(svc_cfg))
+
+            history_hours = max((panel.history_hours for panel in self.zone_panels), default=1.0)
+            self._history_revision = self._history_reader.request(history_hours)
+            history_results = self._history_reader.poll_results()
+            selected_panel = self._selected_zone_panel()
+            for result in history_results:
+                if result.get("revision") != self._history_revision:
+                    continue
+                errors = result.get("errors", [])
+                if errors:
+                    self.history_status_label.config(
+                        text=f"History read issue ({result.get('bytes_read', 0)} bytes this update): "
+                             f"{'; '.join(errors[:2])}",
+                        foreground="darkred",
+                    )
+                else:
+                    self.history_status_label.config(
+                        text=f"History updated ({result.get('bytes_read', 0)} bytes read)",
+                        foreground="gray",
+                    )
+                all_zones_data = result.get("telemetry", {})
+                all_analysis_data = result.get("analysis", {})
+                for panel in self.zone_panels:
+                    zone_data = all_zones_data.get(
+                        panel.zone_id, {"times": [], "pv": [], "sp": [], "sp_autotune": []}
+                    )
+                    zone_mae = all_analysis_data.get(panel.zone_id, {"times": [], "mae": []})
+                    panel.set_mae_history(zone_mae)
+                    panel.set_zone_data(
+                        zone_data,
+                        render=panel is selected_panel,
+                        force=True,
+                    )
 
             for panel in self.zone_panels:
-                zone_data = all_zones_data.get(panel.zone_id, {"times": [], "pv": [], "sp": [], "sp_autotune": []})
-                zone_mae = all_analysis_data.get(panel.zone_id, {"times": [], "mae": []})
-                panel.set_zone_data(zone_data)
-                panel.set_mae_history(zone_mae)
-                zone_metrics = telem_zones.get(str(panel.zone_id), {}) if isinstance(telem_zones, dict) else {}
-                zone_analysis = analysis_zones.get(str(panel.zone_id), {}) if isinstance(analysis_zones, dict) else {}
+                zone_metrics = get_zone(telem_zones, panel.zone_id)
+                zone_analysis = get_zone(analysis_zones, panel.zone_id)
                 panel.set_live_metrics(
                     zone_metrics if isinstance(zone_metrics, dict) else {},
                     zone_analysis if isinstance(zone_analysis, dict) else {},
                 )
+            snapshot_status = (
+                f"Telemetry {self._snapshot_status(telemetry_snapshot)}; "
+                f"analysis {self._snapshot_status(analysis_snapshot)}"
+            )
+            if telemetry_snapshot.error or analysis_snapshot.error:
+                self.history_status_label.config(text=snapshot_status, foreground="darkred")
+            elif telemetry_snapshot.stale or analysis_snapshot.stale:
+                self.history_status_label.config(text=snapshot_status, foreground="darkorange")
         except Exception:
-            if self.debug:
-                print(f"[ChartPanel.refresh] {traceback.format_exc()}")
             LOGGER.exception("ChartPanel.refresh failed")
+            if self.history_status_label is not None:
+                self.history_status_label.config(text="Chart update failed; see GUI error log", foreground="darkred")
     
     def stop_auto_refresh(self):
         """Stop auto-refresh on all zone panels."""
+        self._visible = False
+        self._history_reader.set_active(False)
         if self._refresh_after_id is not None:
-            self.after_cancel(self._refresh_after_id)
+            try:
+                self.after_cancel(self._refresh_after_id)
+            except tk.TclError:
+                LOGGER.info("Chart refresh timer already canceled")
             self._refresh_after_id = None
         if self._render_poll_after_id is not None:
-            self.after_cancel(self._render_poll_after_id)
+            try:
+                self.after_cancel(self._render_poll_after_id)
+            except tk.TclError:
+                LOGGER.info("Chart render timer already canceled")
             self._render_poll_after_id = None
         for panel in self.zone_panels:
             panel.stop_auto_refresh()
@@ -1221,22 +1308,36 @@ class ChartPanel(tk.Frame):
             panel.show_sp_autotune = bool(viewer_cfg.get("show_sp_autotune", panel.show_sp_autotune))
             panel.show_mae = bool(viewer_cfg.get("show_mae", panel.show_mae))
             panel._update_zone_header()
-            panel._request_render()
 
         if self.zone_panels:
             self._update_title(max(panel.history_hours for panel in self.zone_panels))
+            self._history_revision = self._history_reader.request(
+                max(panel.history_hours for panel in self.zone_panels)
+            )
+            selected_panel = self._selected_zone_panel()
+            if self._visible and selected_panel is not None:
+                selected_panel._request_render()
 
     def apply_service_config(self, cfg: Dict[str, Any]):
         if not isinstance(cfg, dict):
             return
         self.apply_zone_names(_normalize_zone_names(cfg.get("zone_names", {})))
 
+    def shutdown(self):
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self.stop_auto_refresh()
+        self._history_reader.shutdown()
+        self.render_pool.shutdown()
+        if self._owns_snapshot_reader:
+            self.snapshot_reader.shutdown()
+
     def shutdown_render_pool(self):
-        """Explicitly tear down the render worker process. Call before the GUI closes."""
+        """Compatibility method retained for callers that only stop chart rendering."""
         self.render_pool.shutdown()
     
     def destroy(self):
         """Clean up all zone panels when container is destroyed."""
-        self.stop_auto_refresh()
-        self.render_pool.shutdown()
+        self.shutdown()
         super().destroy()

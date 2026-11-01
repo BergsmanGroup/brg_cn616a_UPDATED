@@ -49,7 +49,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import select
 import socket
 import sys
 import threading
@@ -59,7 +61,7 @@ from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from queue import Queue, Empty
+from queue import Queue, Empty, Full
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 from collections import deque
 
@@ -215,11 +217,67 @@ def load_persisted_service_config(out_dir: Path) -> Optional["ServiceConfig"]:
 # -----------------------------
 # Command server (JSONL over TCP)
 # -----------------------------
+MAX_COMMAND_BYTES = 64 * 1024
+MAX_ACTIVE_CLIENTS = 8
+MAX_PENDING_COMMANDS = 64
+DEFAULT_COMMAND_TIMEOUT_S = 5.0
+MAX_COMMAND_TIMEOUT_S = 30.0
+
+
 @dataclass
 class CommandRequest:
     cmd: dict
+    queued_at: float = field(default_factory=time.monotonic)
     done: threading.Event = field(default_factory=threading.Event)
     result: Optional[dict] = None
+    state: str = "queued"
+    started_at: Optional[float] = None
+    controller_io_ms: float = 0.0
+    state_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def mark_started(self) -> bool:
+        with self.state_lock:
+            if self.state != "queued":
+                return False
+            self.state = "running"
+            self.started_at = time.monotonic()
+            return True
+
+    def cancel_if_queued(self) -> bool:
+        with self.state_lock:
+            if self.state != "queued":
+                return False
+            self.state = "cancelled"
+            self.done.set()
+            return True
+
+    def finish(self, result: dict) -> None:
+        with self.state_lock:
+            self.result = result
+            self.state = "completed"
+            self.done.set()
+
+    def timeout_response(self) -> dict:
+        with self.state_lock:
+            cid = self.cmd.get("id")
+            if self.state == "queued":
+                self.state = "cancelled"
+                self.done.set()
+            if self.state == "cancelled":
+                return {
+                    "id": cid,
+                    "ok": False,
+                    "state": "not_executed",
+                    "error": "Command timed out in queue and was not executed",
+                }
+            if self.state == "completed" and self.result is not None:
+                return self.result
+            return {
+                "id": cid,
+                "ok": False,
+                "state": "unknown",
+                "error": "Command timed out after execution started; outcome may be unknown",
+            }
 
 
 def command_server(
@@ -231,20 +289,18 @@ def command_server(
 ):
     """
     Robust JSONL TCP server:
-    - Accepts client connections
-    - Reads JSON objects delimited by newline
-    - Enqueues them to service thread
-    - Waits for completion and replies with JSON object per line
+    - Handles a bounded number of client connections concurrently.
+    - Reads size-bounded JSON objects delimited by newline.
+    - Enqueues commands for serialized execution by the service thread.
     """
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
-    srv.listen(5)
+    srv.listen(MAX_ACTIVE_CLIENTS)
     srv.settimeout(0.5)
+    client_slots = threading.BoundedSemaphore(MAX_ACTIVE_CLIENTS)
 
-    #if verbose:
-    if True: #always print this info
-        print(f"[service] command server listening on {host}:{port}")
+    print(f"[service] command server listening on {host}:{port}")
     LOGGER.info("Command server listening on %s:%s", host, port)
 
     while not stop_evt.is_set():
@@ -255,11 +311,53 @@ def command_server(
         except OSError:
             break
 
-        #if verbose:
-        if True: #always print this info
-            print(f"[service] client connected: {addr}")
-        LOGGER.info("Client connected: %s", addr)
+        if not client_slots.acquire(blocking=False):
+            LOGGER.warning("Rejecting TCP client %s: active client limit reached", addr)
+            try:
+                conn.sendall(
+                    (json.dumps({"ok": False, "state": "rejected", "error": "Too many active clients"}) + "\n").encode("utf-8")
+                )
+            except OSError:
+                pass
+            conn.close()
+            continue
 
+        print(f"[service] client connected: {addr}")
+        LOGGER.info("Client connected: %s", addr)
+        threading.Thread(
+            target=_handle_command_client,
+            args=(conn, addr, cmd_q, stop_evt, client_slots),
+            name=f"cn616a-client-{addr[0]}:{addr[1]}",
+            daemon=True,
+        ).start()
+
+    srv.close()
+
+
+def _client_disconnected(conn: socket.socket) -> bool:
+    try:
+        readable, _, _ = select.select([conn], [], [], 0)
+        return bool(readable and conn.recv(1, socket.MSG_PEEK) == b"")
+    except (OSError, ValueError):
+        return True
+
+
+def _send_json_line(conn: socket.socket, response: dict) -> bool:
+    try:
+        conn.sendall((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
+        return True
+    except OSError:
+        return False
+
+
+def _handle_command_client(
+    conn: socket.socket,
+    addr: Tuple[str, int],
+    cmd_q: Queue,
+    stop_evt: threading.Event,
+    client_slots: threading.BoundedSemaphore,
+) -> None:
+    try:
         conn.settimeout(5.0)
         with conn:
             buf = b""
@@ -267,51 +365,105 @@ def command_server(
                 try:
                     chunk = conn.recv(4096)
                 except (ConnectionAbortedError, ConnectionResetError, OSError):
-                    # Normal on Windows if client closes or AV/firewall intervenes.
                     break
                 except socket.timeout:
                     break
 
                 if not chunk:
                     break
-
                 buf += chunk
+                if len(buf) > MAX_COMMAND_BYTES and b"\n" not in buf:
+                    _send_json_line(conn, {"ok": False, "state": "rejected", "error": "Request exceeded the size limit"})
+                    break
+
                 while b"\n" in buf:
                     line, _, buf = buf.partition(b"\n")
                     line = line.strip()
                     if not line:
                         continue
+                    if len(line) > MAX_COMMAND_BYTES:
+                        if not _send_json_line(conn, {"ok": False, "state": "rejected", "error": "Request exceeded the size limit"}):
+                            return
+                        continue
 
                     try:
                         cmd = json.loads(line.decode("utf-8"))
-                    except Exception as e:
-                        LOGGER.exception("Bad JSON from client %s", addr)
-                        resp = {"ok": False, "error": f"Bad JSON: {e}"}
-                        try:
-                            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
-                        except Exception:
-                            pass
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        LOGGER.warning("Bad JSON from client %s: %s", addr, exc)
+                        if not _send_json_line(conn, {"ok": False, "error": f"Bad JSON: {exc}"}):
+                            return
+                        continue
+                    if not isinstance(cmd, dict):
+                        if not _send_json_line(conn, {"ok": False, "error": "Request must be a JSON object"}):
+                            return
+                        continue
+
+                    cid = cmd.get("id")
+                    try:
+                        timeout_s = float(cmd.get("timeout_s", DEFAULT_COMMAND_TIMEOUT_S))
+                    except (TypeError, ValueError):
+                        timeout_s = math.nan
+                    if not math.isfinite(timeout_s) or timeout_s <= 0 or timeout_s > MAX_COMMAND_TIMEOUT_S:
+                        if not _send_json_line(conn, {
+                            "id": cid,
+                            "ok": False,
+                            "state": "rejected",
+                            "error": f"timeout_s must be greater than 0 and no more than {MAX_COMMAND_TIMEOUT_S:g}",
+                        }):
+                            return
                         continue
 
                     req = CommandRequest(cmd=cmd)
-                    cmd_q.put(req)
-
-                    timeout_s = float(cmd.get("timeout_s", 5.0))
-                    finished = req.done.wait(timeout=timeout_s)
-                    if not finished:
-                        resp = {"id": cmd.get("id"), "ok": False, "error": "Command timed out waiting for completion"}
-                    else:
-                        resp = req.result or {"id": cmd.get("id"), "ok": False, "error": "No result returned"}
-
                     try:
-                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
-                    except Exception:
-                        break
+                        cmd_q.put_nowait(req)
+                    except Full:
+                        LOGGER.warning("Rejecting command id=%r because the bounded queue is full", cid)
+                        if not _send_json_line(conn, {
+                            "id": cid,
+                            "ok": False,
+                            "state": "rejected",
+                            "error": "Command queue is full; request was not accepted",
+                        }):
+                            return
+                        continue
 
-    try:
-        srv.close()
-    except Exception:
-        pass
+                    deadline = time.monotonic() + timeout_s
+                    response = None
+                    while response is None:
+                        remaining = deadline - time.monotonic()
+                        if req.done.wait(timeout=min(0.05, max(0.0, remaining))):
+                            response = req.result
+                            if response is None:
+                                response = req.timeout_response()
+                            break
+                        if _client_disconnected(conn):
+                            if req.cancel_if_queued():
+                                LOGGER.info("Command id=%r disconnected before execution; cancelled", cid)
+                            else:
+                                LOGGER.warning("Command id=%r client disconnected after execution started; outcome may be unknown", cid)
+                            return
+                        if stop_evt.is_set() and req.cancel_if_queued():
+                            response = {
+                                "id": cid,
+                                "ok": False,
+                                "state": "not_executed",
+                                "error": "Service is shutting down; command was not executed",
+                            }
+                            LOGGER.warning("Command id=%r cancelled during service shutdown", cid)
+                        elif remaining <= 0:
+                            response = req.timeout_response()
+                            LOGGER.warning(
+                                "Command id=%r timed out with state=%s",
+                                cid,
+                                response.get("state", "completed"),
+                            )
+
+                    if response is None:
+                        response = {"id": cid, "ok": False, "error": "No result returned"}
+                    if not _send_json_line(conn, response):
+                        break
+    finally:
+        client_slots.release()
 
 
 # -----------------------------
@@ -588,7 +740,10 @@ class CN616AService:
         self._last_cycle_ms: Optional[int] = None
 
         # command infra
-        self.cmd_q: Queue = Queue()
+        self.cmd_q: Queue = Queue(maxsize=MAX_PENDING_COMMANDS)
+        self._active_command: Optional[CommandRequest] = None
+        self._last_controller_io_ms: Optional[float] = None
+        self._controller_io_count = 0
         self.stop_evt = threading.Event()
         self._cmd_thread = threading.Thread(
             target=command_server,
@@ -677,6 +832,71 @@ class CN616AService:
             pass
         self._connected = False
 
+    def _controller_call(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Call one driver operation and measure its serialized execution time."""
+        started = time.monotonic()
+        try:
+            return getattr(self.ctl, method_name)(*args, **kwargs)
+        finally:
+            duration_ms = (time.monotonic() - started) * 1000.0
+            self._last_controller_io_ms = duration_ms
+            self._controller_io_count += 1
+            if self._active_command is not None:
+                self._active_command.controller_io_ms += duration_ms
+            LOGGER.debug("Controller operation %s completed in %.3f ms", method_name, duration_ms)
+
+    def _process_pending_commands(self, *, limit: int = 1) -> None:
+        """Run a bounded FIFO batch at safe boundaries between controller operations."""
+        for _ in range(max(0, int(limit))):
+            try:
+                req: CommandRequest = self.cmd_q.get_nowait()
+            except Empty:
+                return
+            if not req.mark_started():
+                continue
+
+            started = req.started_at or time.monotonic()
+            queue_wait_ms = max(0.0, (started - req.queued_at) * 1000.0)
+            self._active_command = req
+            try:
+                response = self.handle_command(req.cmd)
+            except Exception as exc:
+                LOGGER.exception("Unhandled command failure id=%r", req.cmd.get("id"))
+                response = {
+                    "id": req.cmd.get("id"),
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            finally:
+                self._active_command = None
+
+            end_to_end_ms = max(0.0, (time.monotonic() - req.queued_at) * 1000.0)
+            response["timing"] = {
+                "queue_wait_ms": round(queue_wait_ms, 3),
+                "controller_io_ms": round(req.controller_io_ms, 3),
+                "end_to_end_ms": round(end_to_end_ms, 3),
+            }
+            req.finish(response)
+            LOGGER.info(
+                "Command completed id=%r op=%r state=%s queue_wait_ms=%.3f "
+                "controller_io_ms=%.3f end_to_end_ms=%.3f",
+                req.cmd.get("id"),
+                req.cmd.get("op"),
+                "success" if response.get("ok") is True else "failure",
+                queue_wait_ms,
+                req.controller_io_ms,
+                end_to_end_ms,
+            )
+
+    def _check_scheduled_run_stop(self) -> None:
+        if (
+            self._run_active
+            and self._run_schedule_enabled
+            and self._run_schedule_stop_at is not None
+            and datetime.now(timezone.utc) >= self._run_schedule_stop_at
+        ):
+            self._do_stop_run(reason="scheduled")
+
     def restart_serial(self) -> None:
         self.close()
         time.sleep(0.2)
@@ -716,7 +936,7 @@ class CN616AService:
         """
         zones = self.zones_enabled
 
-        data = self.ctl.read_telemetry(zones)
+        data = self._controller_call("read_telemetry", zones)
 
         state_obj = {
             "ts": now_iso_local_ms(),
@@ -829,7 +1049,7 @@ class CN616AService:
         """
         zones = self.zones_enabled
 
-        data = self.ctl.read_config(zones)
+        data = self._controller_call("read_config", zones)
 
         def get_zone_block(container: Any, z: int) -> dict:
             if not isinstance(container, dict):
@@ -901,7 +1121,7 @@ class CN616AService:
         - cn616a_rampsoak_log.jsonl (append only when data changes)
         """
         zones = self.zones_enabled
-        data = self.ctl.read_rampsoak_all(zones)
+        data = self._controller_call("read_rampsoak_all", zones)
 
         state_obj = {
             "ts": now_iso_local_ms(),
@@ -1177,6 +1397,14 @@ class CN616AService:
                     "last_telemetry_ts": self._last_telemetry_ts,
                     "last_error": self._last_err,
                     "cycle_ms": self._last_cycle_ms,
+                    "controller_io": {
+                        "last_duration_ms": (
+                            round(self._last_controller_io_ms, 3)
+                            if self._last_controller_io_ms is not None
+                            else None
+                        ),
+                        "operation_count": self._controller_io_count,
+                    },
                     "zones_enabled": self.zones_enabled,
                     "service_config": self.cfg.to_dict(),
                 }
@@ -1197,35 +1425,35 @@ class CN616AService:
             if op == "set_sp_abs":
                 zone = int(cmd["zone"])
                 value_c = float(cmd["value_c"])
-                self.ctl.set_sp_abs(zone, value_c)
+                self._controller_call("set_sp_abs", zone, value_c)
                 return {"id": cid, "ok": True}
 
             if op == "set_control_method":
                 zone = int(cmd["zone"])
                 method = cmd["method"]
-                self.ctl.set_control_method(zone, method)
+                self._controller_call("set_control_method", zone, method)
                 return {"id": cid, "ok": True}
 
             if op == "set_control_mode":
                 zone = int(cmd["zone"])
                 mode = cmd["mode"]
-                self.ctl.set_control_mode(zone, mode)
+                self._controller_call("set_control_mode", zone, mode)
                 return {"id": cid, "ok": True}
 
             if op == "set_autotune_setpoint":
                 zones = cmd.get("zones", cmd.get("zone"))
                 setpoints = cmd.get("setpoints", cmd.get("value_c"))
-                self.ctl.set_autotune_setpoint(zones, setpoints)
+                self._controller_call("set_autotune_setpoint", zones, setpoints)
                 return {"id": cid, "ok": True}
 
             if op == "start_autotune":
                 zones = cmd.get("zones", cmd.get("zone"))
-                self.ctl.start_autotune(zones)
+                self._controller_call("start_autotune", zones)
                 return {"id": cid, "ok": True}
 
             if op == "stop_autotune":
                 zone = int(cmd["zone"])
-                self.ctl.stop_autotune(zone)
+                self._controller_call("stop_autotune", zone)
                 return {"id": cid, "ok": True}
 
             if op == "read_config":
@@ -1242,21 +1470,21 @@ class CN616AService:
                 if not isinstance(segments_raw, dict) or not segments_raw:
                     return {"id": cid, "ok": False, "error": "segments must be a non-empty object"}
                 segments = {int(seg_i): vals for seg_i, vals in segments_raw.items()}
-                self.ctl.write_rampsoak_profile(zone, segments)
+                self._controller_call("write_rampsoak_profile", zone, segments)
                 self.poll_rampsoak()
                 return {"id": cid, "ok": True}
 
             if op == "set_num_segments":
                 zone = int(cmd["zone"])
                 count = int(cmd["count"])
-                self.ctl.set_num_segments(zone, count)
+                self._controller_call("set_num_segments", zone, count)
                 self.poll_rampsoak()
                 return {"id": cid, "ok": True}
 
             if op == "set_start_profile":
                 zones = cmd.get("zones", cmd.get("zone"))
                 enable = bool(cmd.get("enable", False))
-                self.ctl.set_start_profile(zones, enable)
+                self._controller_call("set_start_profile", zones, enable)
                 self.poll_rampsoak()
                 return {"id": cid, "ok": True}
 
@@ -1342,7 +1570,7 @@ class CN616AService:
     def run(self, *, poll_s: float, verbose: bool = False) -> None:
         """
         Main service loop:
-        1) Drain TCP commands
+        1) Service one queued TCP command at each safe boundary
         2) Telemetry poll (cadence limited by min(--poll, 1/telemetry_hz))
         3) Config poll (1/config_hz)
         4) Ramp/soak poll (1/rampsoak_hz) if enabled
@@ -1375,16 +1603,13 @@ class CN616AService:
         while not self.stop_evt.is_set():
             cycle_t0 = time.monotonic()
 
-            # 1) Drain queued commands (fast, non-blocking)
-            while True:
-                try:
-                    req: CommandRequest = self.cmd_q.get_nowait()
-                except Empty:
-                    break
-
-                resp = self.handle_command(req.cmd)
-                req.result = resp
-                req.done.set()
+            # One FIFO command at each safe boundary prevents command bursts from
+            # starving polls, while allowing commands to run between poll steps.
+            self._check_scheduled_run_stop()
+            self._process_pending_commands()
+            self._check_scheduled_run_stop()
+            if self.stop_evt.is_set():
+                break
 
             now = time.monotonic()
 
@@ -1413,6 +1638,11 @@ class CN616AService:
                 if self.verbose:
                     print(f"[service] telemetry ok={ok} cycle_ms={cycle_ms} z1_pv={z1_pv} err={err}")
 
+            self._process_pending_commands()
+            self._check_scheduled_run_stop()
+            if self.stop_evt.is_set():
+                break
+
             now = time.monotonic()
 
             # 3) Config poll (slower)
@@ -1424,6 +1654,11 @@ class CN616AService:
                     self._last_err = f"{type(e).__name__}: {e}"
                     LOGGER.exception("Config poll failed")
                 next_cfg = now + cfg_period
+
+            self._process_pending_commands()
+            self._check_scheduled_run_stop()
+            if self.stop_evt.is_set():
+                break
 
             now = time.monotonic()
 
@@ -1438,6 +1673,11 @@ class CN616AService:
                         LOGGER.exception("Ramp/soak poll failed")
                 next_rs = now + rs_period
 
+            self._process_pending_commands()
+            self._check_scheduled_run_stop()
+            if self.stop_evt.is_set():
+                break
+
             now = time.monotonic()
 
             # 5) Analysis poll (equilibrium metrics)
@@ -1451,13 +1691,14 @@ class CN616AService:
                         LOGGER.exception("Analysis poll failed")
                 next_an = now + an_period
 
+            self._process_pending_commands()
+            self._check_scheduled_run_stop()
+            if self.stop_evt.is_set():
+                break
+
             # 6) Scheduled run auto-stop. A cheap comparison against a plain stored value each
             # iteration - no timer/thread to cancel, so toggling the checkbox or editing the target
             # time mid-run from the GUI can never leave a stale callback armed.
-            if self._run_active and self._run_schedule_enabled and self._run_schedule_stop_at is not None:
-                if datetime.now(timezone.utc) >= self._run_schedule_stop_at:
-                    self._do_stop_run(reason="scheduled")
-
             # Avoid busy loop
             time.sleep(0.005)
 

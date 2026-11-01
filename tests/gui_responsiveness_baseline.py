@@ -865,9 +865,11 @@ def _run_gui_scenario(
                 raise RuntimeError("Could not locate the GUI tab notebook")
 
             heartbeat_due = time.perf_counter() + heartbeat_interval_ms / 1000.0
+            heartbeat_after_id = None
 
             def heartbeat():
-                nonlocal heartbeat_due
+                nonlocal heartbeat_due, heartbeat_after_id
+                heartbeat_after_id = None
                 now = time.perf_counter()
                 delay_ms = max(0.0, (now - heartbeat_due) * 1000.0)
                 if now - scenario_started < 2.0:
@@ -876,16 +878,23 @@ def _run_gui_scenario(
                     metrics.add_heartbeat(delay_ms)
                 heartbeat_due = now + heartbeat_interval_ms / 1000.0
                 if root.winfo_exists():
-                    root.after(heartbeat_interval_ms, heartbeat)
+                    heartbeat_after_id = root.after(heartbeat_interval_ms, heartbeat)
 
-            root.after(heartbeat_interval_ms, heartbeat)
+            heartbeat_after_id = root.after(heartbeat_interval_ms, heartbeat)
             writer.start()
             scenario_started = time.perf_counter()
 
             def finish():
+                nonlocal heartbeat_after_id
                 metrics.actions["elapsed_seconds"] = round(
                     time.perf_counter() - scenario_started, 3
                 )
+                if heartbeat_after_id is not None:
+                    try:
+                        root.after_cancel(heartbeat_after_id)
+                    except tk.TclError:
+                        pass
+                    heartbeat_after_id = None
                 if app is not None:
                     app._on_closing()
 

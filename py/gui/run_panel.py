@@ -11,10 +11,7 @@ service's authoritative run status, so it can never clobber an in-progress
 edit (the same class of bug fixed in command_panel.py).
 """
 
-import json
 import logging
-import socket
-import uuid
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
@@ -23,7 +20,9 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from .display_panels import StatePanel
-from .state_reader import get_service_config_state
+from .service_client import ServiceClient
+from .entry_behavior import select_all_on_focus
+from .snapshot_reader import StateSnapshotReader
 
 
 LOGGER = logging.getLogger("cn616a.gui")
@@ -73,9 +72,24 @@ def _format_last_data_display(iso_str: Optional[str]) -> str:
 class RunPanel(StatePanel):
     """Start/stop a logging run mirrored into a custom directory, with optional scheduled auto-stop."""
 
-    def __init__(self, parent, logs_dir: Path, debug: bool = False):
-        super().__init__(parent, logs_dir, debug=debug)
+    def __init__(
+        self,
+        parent,
+        logs_dir: Path,
+        debug: bool = False,
+        service_client: Optional[ServiceClient] = None,
+        snapshot_reader: Optional[StateSnapshotReader] = None,
+    ):
+        super().__init__(
+            parent,
+            logs_dir,
+            debug=debug,
+            service_client=service_client,
+            snapshot_reader=snapshot_reader,
+        )
         self._recovery_notice_shown = False
+        self._command_pending = False
+        self._status_poll_pending = False
         self._create_widgets()
 
     def _create_widgets(self):
@@ -92,7 +106,8 @@ class RunPanel(StatePanel):
         self.run_dir_entry = ttk.Entry(card, textvariable=self.run_dir_var, width=50)
         self.run_dir_entry.grid(row=0, column=1, sticky="we", pady=6)
         self.run_dir_entry.bind("<FocusIn>", self._select_all_on_focus)
-        ttk.Button(card, text="Browse...", command=self._on_browse).grid(row=0, column=2, sticky="w", padx=(6, 8), pady=6)
+        self.browse_button = ttk.Button(card, text="Browse...", command=self._on_browse)
+        self.browse_button.grid(row=0, column=2, sticky="w", padx=(6, 8), pady=6)
 
         ttk.Label(card, text="Run Name (optional):").grid(row=1, column=0, sticky="e", padx=(8, 6), pady=4)
         self.run_name_entry = ttk.Entry(card, textvariable=self.run_name_var, width=30)
@@ -132,40 +147,55 @@ class RunPanel(StatePanel):
         self.status_label.grid(row=4, column=0, columnspan=3, sticky="w", padx=(8, 6), pady=(0, 8))
 
     def _select_all_on_focus(self, event=None):
-        widget = event.widget if event is not None else None
-        if widget is None:
-            return
-        widget.select_range(0, tk.END)
-        widget.icursor(tk.END)
+        select_all_on_focus(event)
 
     def _on_browse(self):
-        chosen = filedialog.askdirectory(title="Choose run log directory")
+        try:
+            chosen = filedialog.askdirectory(title="Choose run log directory")
+        except tk.TclError as exc:
+            LOGGER.exception("Windows folder picker failed")
+            self._set_status(
+                f"Folder picker unavailable ({exc}); enter the run directory manually.",
+                ok=False,
+            )
+            return
         if chosen:
             self.run_dir_var.set(chosen)
 
-    def _get_command_endpoint(self) -> tuple[str, int]:
-        svc_state = get_service_config_state(self.logs_dir)
-        cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
-        host = str(cfg.get("last_tcp_host", "127.0.0.1") or "127.0.0.1")
-        try:
-            port = int(cfg.get("last_tcp_port", 8765) or 8765)
-        except Exception:
-            port = 8765
-        return host, port
-
-    def _send_command(self, op: str, **fields) -> Dict[str, Any]:
-        host, port = self._get_command_endpoint()
-        msg = {"id": uuid.uuid4().hex[:8], "op": op}
-        msg.update(fields)
-        data = (json.dumps(msg) + "\n").encode("utf-8")
-        with socket.create_connection((host, port), timeout=2.0) as s:
-            s.sendall(data)
-            s.settimeout(2.0)
-            resp = s.recv(65536).decode("utf-8", errors="ignore").strip()
-        return json.loads(resp) if resp else {"ok": False, "error": "empty response"}
-
     def _set_status(self, message: str, *, ok: bool = True):
         self.status_label.config(text=message, foreground=("black" if ok else "red"))
+
+    def _set_command_pending(self, pending: bool):
+        self._command_pending = pending
+        state = "disabled" if pending else "normal"
+        self.start_button.configure(state=state)
+        self.stop_button.configure(state=state)
+        self.schedule_check.configure(state=state)
+        self.browse_button.configure(state=state)
+        self.run_dir_entry.configure(state=state)
+        self.run_name_entry.configure(state=state)
+        self.schedule_dt_entry.configure(state=state)
+
+    def _queue_command(self, message: Dict[str, Any], pending_text: str, callback):
+        if self._command_pending:
+            return
+        self._set_command_pending(True)
+        self._set_status(pending_text)
+
+        def on_result(result):
+            self._set_command_pending(False)
+            summary, succeeded = self._service_result_summary(result)
+            callback(result, summary, succeeded)
+
+        try:
+            status = self._submit_service([message], on_result)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._set_command_pending(False)
+            self._set_status(f"Unable to queue service request: {exc}", ok=False)
+            return
+        if status != "submitted":
+            self._set_command_pending(False)
+            self._set_status(f"Service request {status}; try again when the service is available", ok=False)
 
     def _parse_schedule_datetime(self) -> Optional[datetime]:
         text = self.schedule_dt_var.get().strip()
@@ -187,40 +217,40 @@ class RunPanel(StatePanel):
             self._set_status("Choose a run directory first", ok=False)
             return
         run_name = self.run_name_var.get().strip()
-        try:
-            resp = self._send_command("start_run", run_dir=run_dir, run_name=run_name or None)
-            if resp.get("ok"):
-                self._set_status(f"Run started: {run_dir}")
-            else:
-                self._set_status(f"Start failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+        def completed(result, summary, succeeded):
+            self._set_status(f"Run started: {run_dir}" if succeeded else summary, ok=succeeded)
+
+        self._queue_command(
+            {"op": "start_run", "run_dir": run_dir, "run_name": run_name or None},
+            "Starting run…",
+            completed,
+        )
 
     def _on_stop_run(self):
-        try:
-            resp = self._send_command("stop_run")
-            if resp.get("ok"):
-                self._set_status("Run stopped" if resp.get("was_active") else "No run was active")
-            else:
-                self._set_status(f"Stop failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+        def completed(result, summary, succeeded):
+            response = result.get("outcomes", [{}])[0].get("response", {})
+            message = "Run stopped" if response.get("was_active") else "No run was active"
+            self._set_status(message if succeeded else summary, ok=succeeded)
+
+        self._queue_command({"op": "stop_run"}, "Stopping run…", completed)
 
     def _send_schedule(self, *, enabled: bool, stop_at: Optional[datetime]):
-        try:
-            resp = self._send_command(
-                "set_run_schedule", enabled=enabled,
-                stop_at_iso=stop_at.isoformat() if stop_at else None,
-            )
-            if resp.get("ok"):
-                if enabled and stop_at is not None:
-                    self._set_status(f"Auto-stop armed for {stop_at.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-                else:
-                    self._set_status("Auto-stop disabled")
+        def completed(_result, summary, succeeded):
+            if succeeded and enabled and stop_at is not None:
+                message = f"Auto-stop armed for {stop_at.strftime('%Y-%m-%d %H:%M:%S %Z')}"
             else:
-                self._set_status(f"Schedule update failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+                message = "Auto-stop disabled"
+            self._set_status(message if succeeded else summary, ok=succeeded)
+
+        self._queue_command(
+            {
+                "op": "set_run_schedule",
+                "enabled": enabled,
+                "stop_at_iso": stop_at.isoformat() if stop_at else None,
+            },
+            "Updating auto-stop schedule…",
+            completed,
+        )
 
     def _on_schedule_toggle(self):
         # Checkbutton's variable is already updated by the time this command callback fires.
@@ -249,12 +279,40 @@ class RunPanel(StatePanel):
     def refresh(self):
         """Poll authoritative run status from the service. Never writes back into
         the editable run/schedule controls - only updates the read-only status line."""
-        try:
-            resp = self._send_command("get_run_status")
-        except Exception as e:
-            self.status_label.config(text=f"Service unreachable: {e}", foreground="red")
+        if self._status_poll_pending:
             return
+        self._status_poll_pending = True
 
+        def on_result(result):
+            self._status_poll_pending = False
+            if self._command_pending:
+                return
+            summary, succeeded = self._service_result_summary(result)
+            if not succeeded:
+                self.status_label.config(text=summary, foreground="red")
+                return
+            resp = result.get("outcomes", [{}])[0].get("response", {})
+            self._render_run_status(resp)
+
+        try:
+            status = self._submit_service(
+                [{"op": "get_run_status"}],
+                on_result,
+                priority=10,
+                coalesce_key="run-status",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._status_poll_pending = False
+            self.status_label.config(text=f"Unable to queue status request: {exc}", foreground="red")
+            return
+        if status == "full" or status == "closed":
+            self._status_poll_pending = False
+            self.status_label.config(
+                text=f"Run status request {status}; service state is not current",
+                foreground="red",
+            )
+
+    def _render_run_status(self, resp: Dict[str, Any]):
         try:
             active = bool(resp.get("run_active"))
             if active:

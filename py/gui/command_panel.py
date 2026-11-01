@@ -5,18 +5,19 @@ Writable command controls for CN616A telemetry tab.
 Separated from read-only telemetry display to keep concerns isolated.
 """
 
-import json
 import logging
-import socket
+import math
 import traceback
-import uuid
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 from typing import Any, Dict, Optional
 
 from .display_panels import StatePanel
-from .state_reader import get_service_config_state, get_telemetry_state, safe_get
+from .service_client import ServiceClient
+from .entry_behavior import select_all_on_focus
+from .snapshot_reader import StateSnapshotReader
+from .state_values import get_field, get_numeric, get_zone, get_zones
 
 
 LOGGER = logging.getLogger("cn616a.gui")
@@ -36,8 +37,7 @@ def _normalize_zone_names(raw: Any) -> Dict[str, str]:
     return names
 
 
-def _load_zone_names_from_logs(logs_dir: Path) -> Dict[str, str]:
-    svc_state = get_service_config_state(logs_dir)
+def _load_zone_names_from_state(svc_state: Dict[str, Any]) -> Dict[str, str]:
     cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
     return _normalize_zone_names(cfg.get("zone_names", {}))
 
@@ -45,11 +45,26 @@ def _load_zone_names_from_logs(logs_dir: Path) -> Dict[str, str]:
 class CommandPanel(StatePanel):
     """Write command controls for SP/mode/autotune in the telemetry tab."""
 
-    def __init__(self, parent, logs_dir: Path, debug: bool = False):
-        super().__init__(parent, logs_dir, debug=debug)
+    def __init__(
+        self,
+        parent,
+        logs_dir: Path,
+        debug: bool = False,
+        service_client: Optional[ServiceClient] = None,
+        snapshot_reader: Optional[StateSnapshotReader] = None,
+    ):
+        super().__init__(
+            parent,
+            logs_dir,
+            debug=debug,
+            service_client=service_client,
+            snapshot_reader=snapshot_reader,
+        )
         self._latest_zones_data: Dict[str, Dict[str, Any]] = {}
         self._zone_token_to_id: Dict[str, str] = {}
         self._form_dirty = False
+        self._form_updating = False
+        self._command_pending = False
         self._create_widgets()
 
     def _create_widgets(self):
@@ -87,7 +102,7 @@ class CommandPanel(StatePanel):
         ttk.Label(self.command_card, text="SP Abs (C):").grid(row=1, column=0, sticky="e", padx=(8, 6), pady=4)
         self.sp_abs_entry = ttk.Entry(self.command_card, textvariable=self.sp_abs_var, width=14)
         self.sp_abs_entry.grid(row=1, column=1, sticky="w", pady=4)
-        self.sp_abs_entry.bind("<KeyRelease>", self._on_form_edited)
+        self.sp_abs_var.trace_add("write", self._on_form_edited)
         self.sp_abs_entry.bind("<FocusIn>", self._select_all_on_focus)
 
         ttk.Label(self.command_card, text="Mode:").grid(row=1, column=2, sticky="e", padx=(12, 6), pady=4)
@@ -104,7 +119,7 @@ class CommandPanel(StatePanel):
         ttk.Label(self.command_card, text="SP Autotune (C):").grid(row=2, column=0, sticky="e", padx=(8, 6), pady=4)
         self.sp_autotune_entry = ttk.Entry(self.command_card, textvariable=self.sp_autotune_var, width=14)
         self.sp_autotune_entry.grid(row=2, column=1, sticky="w", pady=4)
-        self.sp_autotune_entry.bind("<KeyRelease>", self._on_form_edited)
+        self.sp_autotune_var.trace_add("write", self._on_form_edited)
         self.sp_autotune_entry.bind("<FocusIn>", self._select_all_on_focus)
 
         self.apply_button = tk.Button(
@@ -131,30 +146,30 @@ class CommandPanel(StatePanel):
 
         self.status_label = ttk.Label(self.command_card, text="", foreground="gray", font=("Arial", 9))
         self.status_label.grid(row=3, column=0, columnspan=2, sticky="w", padx=(8, 6), pady=(4, 8))
+        self.snapshot_info_label = ttk.Label(self.command_card, text="", foreground="gray", font=("Arial", 8))
+        self.snapshot_info_label.grid(row=4, column=0, columnspan=3, sticky="w", padx=(8, 6), pady=(0, 6))
 
     def _set_status(self, message: str, *, ok: bool = True):
         self.status_label.config(text=message, foreground=("green" if ok else "red"))
 
-    def _on_form_edited(self, _event=None):
+    def _on_form_edited(self, *_args):
+        if self._form_updating:
+            return
         self._form_dirty = True
         self._set_status("Unsaved command edits", ok=True)
 
     def _select_all_on_focus(self, event=None):
-        """Select existing text on focus so typing replaces it instead of inserting at cursor 0."""
-        widget = event.widget if event is not None else None
-        if widget is None:
-            return
-        widget.select_range(0, tk.END)
-        widget.icursor(tk.END)
+        select_all_on_focus(event)
 
     def _safe_float(self, value: str) -> Optional[float]:
         text = str(value).strip()
         if not text:
             return None
         try:
-            return float(text)
+            number = float(text)
         except ValueError:
             return None
+        return number if math.isfinite(number) else None
 
     def _safe_focus_get(self):
         try:
@@ -181,64 +196,49 @@ class CommandPanel(StatePanel):
         return "PID_CONTROL"
 
     def _mode_label_from_zone(self, zone_data: Dict[str, Any]) -> str:
-        value = str(safe_get(zone_data, "control_method", default="") or "").upper()
-        if "ON_OFF" in value:
+        value = str(get_field(zone_data, "control_method", "control_mode", "mode") or "").upper()
+        if "ON_OFF" in value or "ON/OFF" in value:
             return "ON/OFF"
         return "PID"
 
-    def _get_command_endpoint(self) -> tuple[str, int]:
-        svc_state = get_service_config_state(self.logs_dir)
-        cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
-        host = str(cfg.get("last_tcp_host", "127.0.0.1") or "127.0.0.1")
-        try:
-            port = int(cfg.get("last_tcp_port", 8765) or 8765)
-        except Exception:
-            port = 8765
-        return host, port
-
-    def _send_command(self, op: str, **fields) -> Dict[str, Any]:
-        host, port = self._get_command_endpoint()
-        msg = {
-            "id": uuid.uuid4().hex[:8],
-            "op": op,
-            "unit": int(self.unit_var.get() or 1),
-        }
-        msg.update(fields)
-
-        data = (json.dumps(msg) + "\n").encode("utf-8")
-        with socket.create_connection((host, port), timeout=2.0) as s:
-            s.sendall(data)
-            s.settimeout(2.0)
-            resp = s.recv(65536).decode("utf-8", errors="ignore").strip()
-        return json.loads(resp) if resp else {"ok": False, "error": "empty response"}
-
     def _populate_fields_for_zone(self, zone_id: str, *, force: bool = False):
-        zone_data = self._latest_zones_data.get(str(zone_id), {})
+        zone_data = get_zone(self._latest_zones_data, zone_id)
         if not isinstance(zone_data, dict):
             return
-        if self._form_dirty and not force:
+        if (
+            self._form_dirty
+            or self._safe_focus_get() in (self.sp_abs_entry, self.sp_autotune_entry, self.mode_combo)
+        ) and not force:
             return
 
-        sp_abs = safe_get(zone_data, "sp_abs", default=None)
-        autotune_sp = safe_get(zone_data, "autotune_sp", default=None)
-        if isinstance(sp_abs, (int, float)):
-            self.sp_abs_var.set(f"{float(sp_abs):.3f}".rstrip("0").rstrip("."))
-        else:
-            self.sp_abs_var.set("")
-        if isinstance(autotune_sp, (int, float)):
-            self.sp_autotune_var.set(f"{float(autotune_sp):.3f}".rstrip("0").rstrip("."))
-        else:
-            self.sp_autotune_var.set("")
-        self.mode_var.set(self._mode_label_from_zone(zone_data))
-        self._form_dirty = False
+        self._form_updating = True
+        try:
+            sp_abs = get_numeric(zone_data, "sp_abs_c", "sp_abs", "sp_c", "sp", "setpoint_c", "setpoint")
+            autotune_sp = get_numeric(zone_data, "autotune_sp_c", "autotune_sp", "sp_autotune_c", "sp_autotune")
+            self.sp_abs_var.set(f"{sp_abs:.3f}".rstrip("0").rstrip(".") if sp_abs is not None else "")
+            self.sp_autotune_var.set(
+                f"{autotune_sp:.3f}".rstrip("0").rstrip(".") if autotune_sp is not None else ""
+            )
+            self.mode_var.set(self._mode_label_from_zone(zone_data))
+            self._form_dirty = False
+        finally:
+            self._form_updating = False
         self._sync_autotune_buttons(zone_data)
 
     def _sync_autotune_buttons(self, zone_data: Optional[Dict[str, Any]] = None):
+        self.apply_button.configure(
+            state=tk.DISABLED if self._command_pending or not self._zone_token_to_id else tk.NORMAL
+        )
         if zone_data is None:
             zone_id = self._selected_zone_id()
-            zone_data = self._latest_zones_data.get(zone_id or "", {})
+            zone_data = get_zone(self._latest_zones_data, zone_id) if zone_id else {}
 
-        autotune_state = str(safe_get(zone_data or {}, "autotune_enable", default="") or "").upper()
+        if self._command_pending:
+            self.start_autotune_button.state(["disabled"])
+            self.stop_autotune_button.state(["disabled"])
+            self.apply_button.configure(state=tk.DISABLED)
+            return
+        autotune_state = str(get_field(zone_data or {}, "autotune_enable", "autotune_enabled") or "").upper()
         if autotune_state == "ENABLE":
             self.start_autotune_button.state(["disabled"])
             self.stop_autotune_button.state(["!disabled"])
@@ -250,6 +250,12 @@ class CommandPanel(StatePanel):
             self.stop_autotune_button.state(["!disabled"])
 
     def _refresh_zone_selector(self, zone_names: Dict[str, str]):
+        if self._command_pending or self._form_dirty or self._safe_focus_get() in (
+            self.sp_abs_entry,
+            self.sp_autotune_entry,
+            self.mode_combo,
+        ):
+            return
         sorted_zone_ids = sorted(
             [str(z) for z in self._latest_zones_data.keys()],
             key=lambda x: int(x) if str(x).isdigit() else 999,
@@ -282,7 +288,7 @@ class CommandPanel(StatePanel):
             self.zone_var.set(tokens[0])
             self._populate_fields_for_zone(mapping[tokens[0]], force=True)
 
-        self.apply_button.configure(state=tk.NORMAL)
+        self.apply_button.configure(state=tk.DISABLED if self._command_pending else tk.NORMAL)
         self._sync_autotune_buttons()
 
     def _on_zone_selected(self, _event=None):
@@ -294,6 +300,8 @@ class CommandPanel(StatePanel):
             self._set_status("Zone changed, unsent edits discarded", ok=True)
 
     def _on_send_zone_updates(self):
+        if self._command_pending:
+            return
         zone_id = self._selected_zone_id()
         if not zone_id:
             self._set_status("Select a zone first", ok=False)
@@ -311,48 +319,87 @@ class CommandPanel(StatePanel):
             ("set_control_method", {"zone": int(zone_id), "method": mode}),
             ("set_autotune_setpoint", {"zone": int(zone_id), "value_c": autotune_sp}),
         ]
-        try:
-            for op, payload in ops:
-                resp = self._send_command(op, **payload)
-                if not resp.get("ok"):
-                    self._set_status(f"{op} failed: {resp.get('error', 'unknown error')}", ok=False)
-                    return
+        unit = int(self.unit_var.get() or 1)
+        messages = [{"op": op, "unit": unit, **payload} for op, payload in ops]
+        self._set_command_pending(True)
+        self._set_status(f"Sending updates to zone {zone_id}…")
+
+        def on_result(result):
+            self._set_command_pending(False)
+            summary, succeeded = self._service_result_summary(result)
+            if not succeeded:
+                self._set_status(summary, ok=False)
+                return
             self._form_dirty = False
             self._set_status(f"Zone {zone_id} updates sent", ok=True)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+
+        try:
+            status = self._submit_service(messages, on_result)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._set_command_pending(False)
+            self._set_status(f"Unable to queue zone updates: {exc}", ok=False)
+            return
+        if status != "submitted":
+            self._set_command_pending(False)
+            self._set_status(f"Zone updates {status}; no command was sent", ok=False)
 
     def _on_start_autotune(self):
+        if self._command_pending:
+            return
         zone_id = self._selected_zone_id()
         if not zone_id:
             self._set_status("Select a zone first", ok=False)
             return
-        try:
-            resp = self._send_command("start_autotune", zones=[int(zone_id)])
-            if resp.get("ok"):
-                self._set_status(f"Zone {zone_id} autotune started", ok=True)
-                self.start_autotune_button.state(["disabled"])
-                self.stop_autotune_button.state(["!disabled"])
-            else:
-                self._set_status(f"Start failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+        self._queue_autotune_command(
+            {"op": "start_autotune", "zones": [int(zone_id)]},
+            zone_id,
+            "started",
+        )
 
     def _on_stop_autotune(self):
+        if self._command_pending:
+            return
         zone_id = self._selected_zone_id()
         if not zone_id:
             self._set_status("Select a zone first", ok=False)
             return
+        self._queue_autotune_command(
+            {"op": "stop_autotune", "zone": int(zone_id)},
+            zone_id,
+            "stopped",
+        )
+
+    def _set_command_pending(self, pending: bool):
+        self._command_pending = pending
+        state = "disabled" if pending else "normal"
+        self.zone_combo.configure(state="disabled" if pending else "readonly")
+        self.unit_combo.configure(state="disabled" if pending else "readonly")
+        self.sp_abs_entry.configure(state=state)
+        self.sp_autotune_entry.configure(state=state)
+        self.mode_combo.configure(state="disabled" if pending else "readonly")
+        self._sync_autotune_buttons()
+
+    def _queue_autotune_command(self, message: Dict[str, Any], zone_id: str, action: str):
+        self._set_command_pending(True)
+        self._set_status(f"Sending autotune command to zone {zone_id}…")
+
+        def on_result(result):
+            self._set_command_pending(False)
+            summary, succeeded = self._service_result_summary(result)
+            self._set_status(
+                f"Zone {zone_id} autotune {action}" if succeeded else summary,
+                ok=succeeded,
+            )
+
         try:
-            resp = self._send_command("stop_autotune", zone=int(zone_id))
-            if resp.get("ok"):
-                self._set_status(f"Zone {zone_id} autotune stopped", ok=True)
-                self.start_autotune_button.state(["!disabled"])
-                self.stop_autotune_button.state(["disabled"])
-            else:
-                self._set_status(f"Stop failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+            status = self._submit_service([message], on_result)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._set_command_pending(False)
+            self._set_status(f"Unable to queue autotune command: {exc}", ok=False)
+            return
+        if status != "submitted":
+            self._set_command_pending(False)
+            self._set_status(f"Autotune command {status}; no command was sent", ok=False)
 
     def refresh(self):
         try:
@@ -361,18 +408,20 @@ class CommandPanel(StatePanel):
                 # Do not mutate combobox values while user is interacting.
                 return
 
-            telem_state = get_telemetry_state(self.logs_dir)
-            zone_names = _load_zone_names_from_logs(self.logs_dir)
-            telemetry = telem_state.get("telemetry", {}) if isinstance(telem_state, dict) else {}
-            zones_data = telemetry.get("zones", {}) if isinstance(telemetry, dict) else {}
-            self._latest_zones_data = zones_data if isinstance(zones_data, dict) else {}
+            telem_state, telem_snapshot = self._state("telemetry")
+            service_state, service_snapshot = self._state("service_config")
+            zone_names = _load_zone_names_from_state(service_state)
+            self.snapshot_info_label.config(
+                text=f"{self._snapshot_status(telem_snapshot)} | "
+                     f"Service config {self._snapshot_status(service_snapshot)}"
+            )
+            self._latest_zones_data = get_zones(telem_state, "telemetry")
+            if self._command_pending:
+                return
 
-            try:
-                unit_value = str(telem_state.get("unit", "") or "")
-                if unit_value:
-                    self.unit_var.set(unit_value)
-            except Exception:
-                pass
+            unit_value = str(get_field(telem_state, "unit", "unit_id") or "")
+            if unit_value and unit_value != self.unit_var.get() and focused not in (self.sp_abs_entry, self.sp_autotune_entry):
+                self.unit_var.set(unit_value)
 
             self._refresh_zone_selector(zone_names)
             selected_zone = self._selected_zone_id()

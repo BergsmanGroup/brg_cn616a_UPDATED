@@ -47,7 +47,7 @@ cn616a_service.py
 CLI / GUI     logs/ directory
 ```
 
-The service owns the serial connection and runs the polling loop. TCP commands are accepted by a daemon listener thread, queued, and executed by the service loop. This prevents the CLI and GUI from competing for the COM port.
+The service owns the serial connection and runs the polling loop. A bounded TCP listener accepts concurrent clients, queues commands, and lets the service loop execute them in FIFO order. Only that loop accesses the controller; it checks one queued command at safe boundaries between complete polling operations, so serial transactions never overlap and a command burst cannot indefinitely starve polling or scheduled run stops.
 
 ## Architecture
 
@@ -76,7 +76,7 @@ The driver exposes stable application methods rather than making the service kno
 
 ### Service: `py/cn616a_service.py`
 
-`CN616AService` owns scheduling, persistence, command handling, error state, and connection lifecycle.
+`CN616AService` owns scheduling, persistence, command handling, error state, and connection lifecycle. Command responses and service logs report queue wait, controller-operation duration, and end-to-end service execution time separately.
 
 At startup it:
 
@@ -87,7 +87,7 @@ At startup it:
 5. Performs an initial configuration poll to seed the setpoint cache.
 6. Enters the polling loop.
 
-The loop drains pending commands and then schedules four types of work:
+The loop services at most one queued command at each safe boundary, checks scheduled run stops, and schedules four types of work:
 
 | Work | Default cadence | Output |
 |---|---:|---|
@@ -458,7 +458,7 @@ Uses the service's on-demand ramp/soak read path. The register map describes 20 
 
 ### Chart tab
 
-The chart is loaded lazily when selected. It reads historical telemetry and analysis data, breaks visible lines across time gaps, and can display PV, setpoint, autotune setpoint, and MAE. On Python 3.13 or newer, the tab is disabled unless `--allow-unsafe-chart` or `CN616A_GUI_ALLOW_UNSAFE_CHART=1` is supplied because of a known TkAgg/Matplotlib crash risk. The recommended solution is Python 3.12.
+The chart is loaded lazily when selected. A bounded background reader incrementally ingests historical telemetry and analysis data, including rotated logs, and requests a full reload only after truncation/replacement or when a longer history window is selected. Rendering is limited to the visible zone, with one active and one replaceable pending render request. Chart history keeps a bounded in-memory window, preserves extrema and time gaps while downsampling, and reports read errors. It can display PV, setpoint, autotune setpoint, and MAE. On Python 3.13 or newer, the tab is disabled unless `--allow-unsafe-chart` or `CN616A_GUI_ALLOW_UNSAFE_CHART=1` is supplied because of a known TkAgg/Matplotlib crash risk. The recommended solution is Python 3.12.
 
 ## JSON Lines protocol
 
@@ -478,12 +478,28 @@ Example response:
 
 Every command may include an `id`; the service echoes it. The service waits up to `timeout_s` from the request, defaulting to five seconds, for command completion.
 
+The listener serves up to eight active TCP clients concurrently, accepts request
+lines up to 64 KiB, and uses a FIFO command queue bounded to 64 pending requests.
+Requests with an invalid timeout or full queue are rejected before execution.
+`timeout_s` must be greater than zero and at most 30 seconds. A timeout while a
+command is still queued cancels it and returns `state: "not_executed"`. Once
+execution has started, a timeout returns `state: "unknown"`; the operation may
+still finish, and clients must verify controller state before retrying. Client
+disconnects cancel requests that have not started; an in-progress operation is
+not cancelled or retried.
+
+Completed responses include a `timing` object with `queue_wait_ms`,
+`controller_io_ms`, and `end_to_end_ms`. These are service-side measurements,
+not estimates of physical controller response or GUI repaint time. A complete
+poll/driver operation is not interrupted, so a long individual operation can
+still delay the next command; hardware timing has not been measured.
+
 Supported operations are:
 
 | Operation | Purpose |
 |---|---|
 | `ping` | Health check |
-| `get_status` | Connection, last telemetry time, last error, cycle time, enabled zones, and service config |
+| `get_status` | Connection, last telemetry time, last error, cycle time, last controller-operation duration, enabled zones, and service config |
 | `get_service_config` | Return persisted/runtime service configuration |
 | `set_service_config` | Apply a JSON object patch |
 | `connect_serial` | Connect when disconnected |
@@ -557,6 +573,21 @@ not a measured pixel repaint. The first two seconds of heartbeat samples are
 reported separately as warm-up in JSON. Use full for better sample coverage;
 very slow scenarios can still have insufficient samples. Measurements include
 instrumentation overhead; targets are workload/machine-specific.
+
+The GUI sends every service request through one bounded worker shared by its
+panels; status polls are coalesced and lower priority than operator actions.
+Command feedback distinguishes confirmed success/failure, requests not sent,
+and unknown outcomes (which must be verified before retrying). Only the visible
+tab refreshes, except Run status/recovery polling, which remains active while
+Run is hidden. Configuration retention estimates sample bounded portions of
+current and rotated logs off the Tk thread; limited, fallback, or failed
+samples are labeled uncertain and do not reduce configured file retention.
+Service state snapshots are read once by a shared change-aware background
+reader, bounded to 4 MiB per file; panels display snapshot age and stale or
+read-error status rather than silently presenting unavailable data as current.
+If the native Windows folder picker raises a Tcl error, the Run panel reports
+it and leaves manual directory entry available. The synthetic harness replaces
+the native picker, so it does not certify the real Windows dialog.
 
 Data tools are separate Python commands, not batch test flags:
 
@@ -652,6 +683,7 @@ The tests cover:
 | CLI | Argument parsing, zone parsing, and command-message construction |
 | Driver helpers | Float/hex conversion, enum construction, register block extraction |
 | Service commands | Dispatch, service-config patches, and error propagation with mocked controller behavior |
+| Service scheduling | Concurrent fake clients, serialized fake-controller access, FIFO responses, timeout/disconnect lifecycle, and request bounds |
 | Service utilities | Frequency conversion, stable hashes, atomic JSON writes, rotation, and config round trips |
 | GUI/state reader | Safe JSON reads, zone-name normalization, and chart-version guard behavior |
 | Chart gaps | NaN insertion for time gaps in plotted histories |
@@ -701,7 +733,7 @@ For module-level debugging, run the service with `--verbose`, inspect `get_statu
 
 ### Commands time out
 
-Commands are serialized with polling work and normally have a five-second completion timeout. A timeout can indicate a blocked serial transaction, an unresponsive controller, or a stopped service. Check `get_status`, the service console, and the rotating service error log; restart the serial connection or service after resolving the physical issue.
+Commands are serialized with polling work and normally have a five-second completion timeout. A timeout marked `not_executed` was cancelled before it began. A timeout marked `unknown` means execution had already started and may have completed; do not retry a write until checking controller state. A timeout can indicate a blocked serial transaction, an unresponsive controller, or a stopped service. Check `get_status`, the service console, and the rotating service error log; restart the serial connection or service after resolving the physical issue.
 
 ### Logs grow unexpectedly
 

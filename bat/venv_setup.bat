@@ -8,6 +8,7 @@ REM ============================================
 set PYTHON_VERSION=3.12
 set VENV_NAME=.venv
 set PYTHON_CMD=
+set PYTHON_FOUND_VERSION=
 
 REM Resolve repo root (this file is in repo_root\bat)
 set SCRIPT_DIR=%~dp0
@@ -35,11 +36,30 @@ if "%PYTHON_CMD%"=="" (
   )
 )
 
+REM Also accept a 3.12 executable exposed as python/python3/python3.12 when
+REM the py launcher is unavailable or not on PATH. This includes Store aliases.
 if "%PYTHON_CMD%"=="" (
+  for %%P in (python.exe python3.exe python3.12.exe) do (
+    where %%P >nul 2>nul
+    if not errorlevel 1 (
+      %%P -c "import sys; raise SystemExit(0 if sys.version_info[0] == 3 and sys.version_info[1] == 12 else 1)" >nul 2>nul
+      if not errorlevel 1 set "PYTHON_CMD=%%P"
+    )
+  )
+)
+
+if "%PYTHON_CMD%"=="" (
+  for %%P in (python.exe python3.exe python3.12.exe) do (
+    where %%P >nul 2>nul
+    if not errorlevel 1 if "!PYTHON_FOUND_VERSION!"=="" (
+      for /f "tokens=2" %%V in ('%%P --version 2^>^&1') do set "PYTHON_FOUND_VERSION=%%V"
+    )
+  )
   echo ERROR: Could not locate Python %PYTHON_VERSION%.
   echo Install Python %PYTHON_VERSION% and rerun this script.
   echo Expected commands: py -%PYTHON_VERSION% -V
   echo Expected path: %LocalAppData%\Programs\Python\Python312\python.exe
+  if not "!PYTHON_FOUND_VERSION!"=="" echo Detected on PATH: !PYTHON_FOUND_VERSION! - not supported; Python %PYTHON_VERSION% is required.
   popd
   pause
   exit /b 1

@@ -5,7 +5,11 @@ All commands below should be run from the repository root.
 ## Python Version
 
 This project is pinned to Python `3.12` for GUI stability.
-`bat\venv_setup.bat` creates `.venv` using `py -3.12` and will fail fast if Python 3.12 is not installed.
+`bat\venv_setup.bat` creates `.venv` using `py -3.12` (or a `python`, `python3`,
+or `python3.12` command that resolves to Python 3.12) and will fail fast if
+Python 3.12 is not installed. Python 3.13 and newer are not an equivalent
+replacement for the GUI runtime because the chart safety guard disables chart
+support there by default.
 
 ## 1) Create/update virtual environment
 

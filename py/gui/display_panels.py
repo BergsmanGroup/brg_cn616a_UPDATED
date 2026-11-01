@@ -12,18 +12,17 @@ from typing import Dict, Any, List, Optional
 import time
 import traceback
 import json
-import socket
-import uuid
 import logging
 import math
 import re
 from datetime import datetime
 
-from .state_reader import (
-    get_telemetry_state, get_config_state, get_rampsoak_state, get_analysis_state,
-    get_service_config_state,
-    format_timestamp, safe_get
-)
+from .state_reader import format_timestamp, safe_get
+from .service_client import ServiceClient
+from .retention_estimator import RetentionEstimateWorker, estimate_log_storage as estimate_log_storage
+from .entry_behavior import select_all_on_focus
+from .state_values import get_field, get_numeric, get_zone, get_zones
+from .snapshot_reader import StateSnapshot, StateSnapshotReader
 
 LOGGER = logging.getLogger("cn616a.gui")
 
@@ -46,48 +45,8 @@ def parse_retention_seconds(value: Any) -> Optional[float]:
         "w": 604_800.0, "wk": 604_800.0, "week": 604_800.0, "weeks": 604_800.0,
     }
     multiplier = multipliers.get(unit)
-    return amount * multiplier if multiplier is not None and amount > 0 else None
-
-
-def estimate_log_storage(
-    logs_dir: Path,
-    log_name: str,
-    retention_s: Optional[float],
-    rate_hz: Optional[float],
-    max_bytes: Optional[int],
-    fallback_record_bytes: int,
-) -> Optional[Dict[str, Any]]:
-    """Estimate records, bytes, file count, and capacity for a retention setting."""
-    if retention_s is None or rate_hz is None or max_bytes is None:
-        return None
-    if retention_s <= 0 or rate_hz <= 0 or max_bytes <= 0:
-        return None
-
-    paths = sorted(logs_dir.glob(f"{Path(log_name).stem}_*{Path(log_name).suffix}"))
-    paths.append(logs_dir / log_name)
-    sizes = []
-    for path in paths:
-        if not path.exists():
-            continue
-        try:
-            with path.open("rb") as stream:
-                for line in stream:
-                    if line.strip():
-                        sizes.append(len(line))
-        except OSError:
-            LOGGER.warning("Unable to read log size sample from %s", path)
-    average_record_bytes = (sum(sizes) / len(sizes)) if sizes else float(fallback_record_bytes)
-    records = retention_s * rate_hz
-    estimated_bytes = max(1, math.ceil(records * average_record_bytes))
-    file_count = max(1, math.ceil(estimated_bytes / max_bytes))
-    capacity_bytes = file_count * max_bytes
-    return {
-        "records": records,
-        "average_record_bytes": average_record_bytes,
-        "estimated_bytes": estimated_bytes,
-        "file_count": file_count,
-        "capacity_bytes": capacity_bytes,
-    }
+    seconds = amount * multiplier if multiplier is not None else None
+    return seconds if seconds is not None and math.isfinite(seconds) and seconds > 0 else None
 
 
 def _normalize_zone_names(raw: Any) -> Dict[str, str]:
@@ -104,8 +63,7 @@ def _normalize_zone_names(raw: Any) -> Dict[str, str]:
     return names
 
 
-def _load_zone_names_from_logs(logs_dir: Path) -> Dict[str, str]:
-    svc_state = get_service_config_state(logs_dir)
+def _load_zone_names_from_state(svc_state: Dict[str, Any]) -> Dict[str, str]:
     cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
     return _normalize_zone_names(cfg.get("zone_names", {}))
 
@@ -113,13 +71,101 @@ def _load_zone_names_from_logs(logs_dir: Path) -> Dict[str, str]:
 class StatePanel(tk.Frame):
     """Base class for state display panels."""
     
-    def __init__(self, parent, logs_dir: Path, auto_refresh_interval: float = 2.0, debug: bool = False):
+    def __init__(
+        self,
+        parent,
+        logs_dir: Path,
+        auto_refresh_interval: float = 2.0,
+        debug: bool = False,
+        service_client: Optional[ServiceClient] = None,
+        snapshot_reader: Optional[StateSnapshotReader] = None,
+    ):
         super().__init__(parent)
         self.logs_dir = Path(logs_dir)
         self.auto_refresh_interval = auto_refresh_interval
         self.debug = debug
+        self.service_client = service_client
+        self.snapshot_reader = snapshot_reader or StateSnapshotReader(self.logs_dir)
+        self._owns_snapshot_reader = snapshot_reader is None
         self.running = False
         self._after_id: Optional[str] = None
+
+    def _snapshot(self, name: str) -> StateSnapshot:
+        return self.snapshot_reader.snapshot(name)
+
+    def _state(self, name: str) -> tuple[Dict[str, Any], StateSnapshot]:
+        snapshot = self._snapshot(name)
+        return (snapshot.data or {}, snapshot)
+
+    @staticmethod
+    def _snapshot_status(snapshot: StateSnapshot) -> str:
+        if snapshot.error:
+            return f"Snapshot unavailable: {snapshot.error}"
+        if snapshot.age_s is None:
+            return "Snapshot age unavailable"
+        age = max(0, int(snapshot.age_s))
+        freshness = "stale" if snapshot.stale else "current"
+        return f"Snapshot {freshness} ({age}s old)"
+
+    def _service_endpoint(self) -> tuple[str, int]:
+        svc_snapshot = self._snapshot("service_config")
+        if svc_snapshot.error and not svc_snapshot.error.startswith("Snapshot file not found:"):
+            raise RuntimeError(f"Service configuration is not ready: {svc_snapshot.error}")
+        svc_state = svc_snapshot.data or {}
+        cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
+        host = str(cfg.get("last_tcp_host", "127.0.0.1") or "127.0.0.1")
+        try:
+            port = int(cfg.get("last_tcp_port", 8765) or 8765)
+        except (TypeError, ValueError):
+            port = 8765
+        return host, port
+
+    def _submit_service(
+        self,
+        messages: List[Dict[str, Any]],
+        callback,
+        *,
+        priority: int = 0,
+        coalesce_key: Optional[str] = None,
+        endpoint: Optional[tuple[str, int]] = None,
+    ) -> str:
+        if self.service_client is None:
+            raise RuntimeError("shared service client is not configured")
+        host, port = endpoint or self._service_endpoint()
+        return self.service_client.submit(
+            host,
+            port,
+            messages,
+            callback,
+            priority=priority,
+            coalesce_key=coalesce_key,
+        )
+
+    @staticmethod
+    def _service_result_summary(result: Dict[str, Any]) -> tuple[str, bool]:
+        labels = []
+        all_succeeded = True
+        needs_verification = False
+        for outcome in result.get("outcomes", []):
+            operation = str(outcome.get("op", "service operation"))
+            state = outcome.get("state")
+            if state == "confirmed_success":
+                labels.append(f"{operation}: succeeded")
+                continue
+            all_succeeded = False
+            if state == "confirmed_failure":
+                labels.append(f"{operation}: rejected ({outcome.get('error', 'service rejected the command')})")
+            elif state == "not_sent":
+                labels.append(f"{operation}: not sent ({outcome.get('error', 'request was not sent')})")
+            else:
+                labels.append(f"{operation}: outcome unknown ({outcome.get('error', 'no confirmed response')})")
+                needs_verification = True
+        if not labels:
+            return "Service returned no operation outcome", False
+        message = "; ".join(labels)
+        if needs_verification:
+            message += ". Verify controller/service state before retrying."
+        return message, all_succeeded
     
     def _debug_log(self, msg: str):
         """Print debug message only if debug mode is enabled."""
@@ -143,6 +189,10 @@ class StatePanel(tk.Frame):
                 LOGGER.exception("Failed canceling refresh timer")
             finally:
                 self._after_id = None
+
+    def shutdown(self):
+        if self._owns_snapshot_reader:
+            self.snapshot_reader.shutdown()
     
     def _schedule_refresh(self, *, initial: bool = False):
         if not self.running:
@@ -172,8 +222,21 @@ class StatePanel(tk.Frame):
 class TelemetryPanel(StatePanel):
     """Display telemetry: PV, setpoint, output per zone."""
     
-    def __init__(self, parent, logs_dir: Path, debug: bool = False):
-        super().__init__(parent, logs_dir, debug=debug)
+    def __init__(
+        self,
+        parent,
+        logs_dir: Path,
+        debug: bool = False,
+        service_client: Optional[ServiceClient] = None,
+        snapshot_reader: Optional[StateSnapshotReader] = None,
+    ):
+        super().__init__(
+            parent,
+            logs_dir,
+            debug=debug,
+            service_client=service_client,
+            snapshot_reader=snapshot_reader,
+        )
         self.create_widgets()
         self.zone_numeric_labels = {}
         self.zone_detail_labels = {}
@@ -216,16 +279,13 @@ class TelemetryPanel(StatePanel):
     
     def _format_numeric_telemetry(self, zone_data: Dict) -> str:
         """Format top-of-card numeric telemetry summary."""
-        pv = safe_get(zone_data, "pv_c", default="N/A")
-        sp = safe_get(zone_data, "sp_abs", default="N/A")
-        out = safe_get(zone_data, "out_pct", default="N/A")
+        pv = get_numeric(zone_data, "pv_c", "pv", "PV", "process_value_c", "process_value")
+        sp = get_numeric(zone_data, "sp_abs_c", "sp_abs", "sp_c", "sp", "SP_abs", "SP", "setpoint_c", "setpoint")
+        out = get_numeric(zone_data, "out_pct", "output_pct", "output", "OUT")
 
-        if isinstance(pv, (int, float)):
-            pv = f"{float(pv):.2f} C"
-        if isinstance(sp, (int, float)):
-            sp = f"{float(sp):.2f} C"
-        if isinstance(out, (int, float)):
-            out = f"{float(out):.1f} %"
+        pv = f"{pv:.2f} C" if pv is not None else "N/A"
+        sp = f"{sp:.2f} C" if sp is not None else "N/A"
+        out = f"{out:.1f} %" if out is not None else "N/A"
 
         return f"PV: {pv}    SP: {sp}\nOutput: {out}"
 
@@ -252,14 +312,14 @@ class TelemetryPanel(StatePanel):
         lines.append("")  # Blank line separator
         lines.append("Status Telemetry:")
         
-        control_method = safe_get(zone_data, "control_method", default="N/A")
-        autotune_enable = safe_get(zone_data, "autotune_enable", default="N/A")
-        control_mode = safe_get(zone_data, "control_mode", default="N/A")
-        loop_status = safe_get(zone_data, "loop_status", default="N/A")
+        control_method = get_field(zone_data, "control_method", "mode", "control_mode") or "N/A"
+        autotune_enable = get_field(zone_data, "autotune_enable", "autotune_enabled") or "N/A"
+        control_mode = get_field(zone_data, "control_mode", "mode", "control_method") or "N/A"
+        loop_status = get_field(zone_data, "loop_status", "status") or "N/A"
         
         # Convert ENABLE/DISABLE to On/Off and always add SP
-        autotune_sp = safe_get(zone_data, "autotune_sp", default=None)
-        if isinstance(autotune_sp, float):
+        autotune_sp = get_numeric(zone_data, "autotune_sp_c", "autotune_sp", "sp_autotune_c", "sp_autotune")
+        if autotune_sp is not None:
             autotune_sp_display = f"({autotune_sp:.1f}°C)"
         else:
             autotune_sp_display = ""
@@ -275,9 +335,12 @@ class TelemetryPanel(StatePanel):
         lines.append(f"  Mode: {control_mode}  |  Status: {loop_status}")
         
         # Segment and Ramp/Soak
-        segment_idx = safe_get(zone_data, "current_segment_index", default="N/A")
-        segment_state = safe_get(zone_data, "current_segment_state", default="N/A")
-        ramp_remaining = safe_get(zone_data, "ramp_soak_remaining", default="N/A")
+        segment_idx = get_field(zone_data, "current_segment_index", "segment_index", "ramp_soak_segment")
+        segment_state = get_field(zone_data, "current_segment_state", "segment_state")
+        ramp_remaining = get_field(zone_data, "ramp_soak_remaining", "ramp_soak_remaining_s", "remaining_s")
+        segment_idx = "N/A" if segment_idx is None else segment_idx
+        segment_state = "N/A" if segment_state is None else segment_state
+        ramp_remaining = "N/A" if ramp_remaining is None else ramp_remaining
         
         if isinstance(ramp_remaining, float):
             ramp_remaining = f"{ramp_remaining:.1f}s"
@@ -289,23 +352,14 @@ class TelemetryPanel(StatePanel):
         lines.append("PID Parameters:")
         
         # Get PID gains directly from telemetry zone data (now part of telemetry polling)
-        p_gain = safe_get(zone_data, "p_gain", default=None)
-        i_gain = safe_get(zone_data, "i_gain", default=None)
-        d_gain = safe_get(zone_data, "d_gain", default=None)
+        p_gain = get_numeric(zone_data, "p_gain", "kp", "proportional_gain")
+        i_gain = get_numeric(zone_data, "i_gain", "ki", "integral_gain")
+        d_gain = get_numeric(zone_data, "d_gain", "kd", "derivative_gain")
         
         # Format floats nicely
-        if p_gain is not None:
-            p_gain = f"{p_gain:.4f}"
-        else:
-            p_gain = "N/A"
-        if i_gain is not None:
-            i_gain = f"{i_gain:.4f}"
-        else:
-            i_gain = "N/A"
-        if d_gain is not None:
-            d_gain = f"{d_gain:.4f}"
-        else:
-            d_gain = "N/A"
+        p_gain = f"{p_gain:.4f}" if p_gain is not None else "N/A"
+        i_gain = f"{i_gain:.4f}" if i_gain is not None else "N/A"
+        d_gain = f"{d_gain:.4f}" if d_gain is not None else "N/A"
         
         lines.append(f"  P: {p_gain}  |  I: {i_gain}  |  D: {d_gain}")
         
@@ -314,11 +368,11 @@ class TelemetryPanel(StatePanel):
         deadband = safe_get(pid_params, "deadband", default=None)
         cycle_time = safe_get(pid_params, "cycle_time_s", default=None)
         
-        if deadband is not None:
+        if isinstance(deadband, (int, float)) and math.isfinite(float(deadband)):
             deadband = f"{deadband:.2f}°C"
         else:
             deadband = "N/A"
-        if cycle_time is not None:
+        if isinstance(cycle_time, (int, float)) and math.isfinite(float(cycle_time)):
             cycle_time = f"{cycle_time:.1f}s"
         else:
             cycle_time = "N/A"
@@ -332,13 +386,17 @@ class TelemetryPanel(StatePanel):
             lines.append("Analysis:")
             
             equilibrium = safe_get(analysis_data, "in_equilibrium", default="N/A")
-            avg_error = safe_get(analysis_data, "avg_abs_error_c", default="N/A")
-            threshold = safe_get(analysis_data, "threshold_c", default="N/A")
-            
-            if isinstance(avg_error, float):
+            avg_error = get_numeric(analysis_data, "avg_abs_error_c", "mae_c", "mae")
+            threshold = get_numeric(analysis_data, "threshold_c", "equilibrium_threshold_c")
+
+            if avg_error is not None:
                 avg_error = f"{avg_error:.3f}°C"
-            if isinstance(threshold, float):
+            else:
+                avg_error = "N/A"
+            if threshold is not None:
                 threshold = f"{threshold:.2f}°C"
+            else:
+                threshold = "N/A"
 
             if equilibrium is True:
                 equilibrium_txt = "Yes"
@@ -363,35 +421,39 @@ class TelemetryPanel(StatePanel):
     def refresh(self):
         """Update telemetry display."""
         try:
-            telem_state = get_telemetry_state(self.logs_dir)
-            analysis_state = get_analysis_state(self.logs_dir)
-            config_state = get_config_state(self.logs_dir)
-            zone_names = _load_zone_names_from_logs(self.logs_dir)
+            telem_state, telem_snapshot = self._state("telemetry")
+            analysis_state, analysis_snapshot = self._state("analysis")
+            config_state, _config_snapshot = self._state("config")
+            service_state, _service_snapshot = self._state("service_config")
+            zone_names = _load_zone_names_from_state(service_state)
             
             ts = telem_state.get("ts")
             port = telem_state.get("port")
-            telemetry = telem_state.get("telemetry", {})
-            analysis = analysis_state.get("analysis", {})
             config = config_state.get("config", {})
             zones_config = config.get("zones", {})
+            zones_data = get_zones(telem_state, "telemetry")
+            analysis_data = get_zones(analysis_state, "analysis")
+            zone_ids = sorted((str(zone_id) for zone_id in zones_data), key=lambda value: int(value) if value.isdigit() else 999)
             
             # Show the timestamp of whichever is more recent
             analysis_ts = analysis_state.get("ts")
             display_ts = ts if ts else analysis_ts
             
-            self.info_label.config(text=f"Last update: {format_timestamp(display_ts)} | Port: {port}")
+            self.info_label.config(
+                text=(f"Last update: {format_timestamp(display_ts)} | Port: {port} | "
+                      f"Telemetry {self._snapshot_status(telem_snapshot)} | "
+                      f"Analysis {self._snapshot_status(analysis_snapshot)}")
+            )
             
-            if not telemetry or "zones" not in telemetry:
+            if not zone_ids:
                 for label in self.zone_numeric_labels.values():
                     label.config(text="PV: N/A    SP: N/A\nOutput: N/A")
                 for label in self.zone_detail_labels.values():
                     label.config(text="No data available")
                 return
             
-            zones_data = telemetry.get("zones", {})
-            
             # Clear old labels if needed
-            if set(self.zone_detail_labels.keys()) != set(zones_data.keys()):
+            if set(self.zone_detail_labels.keys()) != set(zone_ids):
                 for widget in self.zones_container.winfo_children():
                     widget.destroy()
                 self.zone_numeric_labels.clear()
@@ -399,8 +461,7 @@ class TelemetryPanel(StatePanel):
                 self.zone_frames.clear()
             
             # Update or create zone displays
-            sorted_zone_ids = sorted(zones_data.keys(), key=lambda x: int(x) if x.isdigit() else 999)
-            for idx, zone_id in enumerate(sorted_zone_ids):
+            for idx, zone_id in enumerate(zone_ids):
                 zone_display = zone_names.get(str(zone_id), f"Zone {zone_id}")
                 if zone_id not in self.zone_detail_labels:
                     zone_frame = ttk.LabelFrame(self.zones_container, text=zone_display)
@@ -428,9 +489,9 @@ class TelemetryPanel(StatePanel):
                     self.zone_frames[zone_id].config(text=zone_display)
                 
                 # Get telemetry, analysis, and config data for this zone
-                zone_data = zones_data[zone_id]
-                zone_analysis = analysis.get(zone_id, {})
-                zone_config = zones_config.get(zone_id, {})
+                zone_data = get_zone(zones_data, zone_id)
+                zone_analysis = get_zone(analysis_data, zone_id)
+                zone_config = get_zone(zones_config, zone_id)
                 
                 numeric_text = self._format_numeric_telemetry(zone_data)
                 details_text = self._format_telemetry_zone_details(zone_data, zone_analysis, zone_config)
@@ -452,14 +513,35 @@ class TelemetryPanel(StatePanel):
 class ConfigPanel(StatePanel):
     """Display configuration: system settings and zone alarms."""
     
-    def __init__(self, parent, logs_dir: Path, debug: bool = False, on_viewer_config_changed=None, on_service_config_changed=None):
-        super().__init__(parent, logs_dir, debug=debug)
+    def __init__(
+        self,
+        parent,
+        logs_dir: Path,
+        debug: bool = False,
+        on_viewer_config_changed=None,
+        on_service_config_changed=None,
+        service_client: Optional[ServiceClient] = None,
+        snapshot_reader: Optional[StateSnapshotReader] = None,
+    ):
+        super().__init__(
+            parent,
+            logs_dir,
+            debug=debug,
+            service_client=service_client,
+            snapshot_reader=snapshot_reader,
+        )
         self.on_viewer_config_changed = on_viewer_config_changed
         self.on_service_config_changed = on_service_config_changed
         self._service_cfg_cache = {}
         self._form_updating = False
         self._form_dirty = False
+        self._edit_revision = 0
+        self._config_action_pending = False
+        self._retention_revision = 0
+        self._retention_specs = None
+        self._retention_estimates = {}
         self.create_widgets()
+        self._retention_worker = RetentionEstimateWorker(self.logs_dir)
     
     def create_widgets(self):
         # Header
@@ -498,7 +580,12 @@ class ConfigPanel(StatePanel):
 
         self.service_actions_frame = ttk.Frame(self.service_frame)
         self.service_actions_frame.pack(fill=tk.X, padx=10, pady=(0, 6))
-        ttk.Button(self.service_actions_frame, text="Apply Service Settings", command=self._on_apply_settings_clicked).pack(side=tk.RIGHT)
+        self.apply_settings_button = ttk.Button(
+            self.service_actions_frame,
+            text="Apply Service Settings",
+            command=self._on_apply_settings_clicked,
+        )
+        self.apply_settings_button.pack(side=tk.RIGHT)
 
         # Scrollable form container to keep all controls accessible on smaller windows
         service_form_container = ttk.Frame(self.service_frame)
@@ -569,9 +656,16 @@ class ConfigPanel(StatePanel):
                 widget.bind("<<ComboboxSelected>>", self._on_form_edited)
 
         conn_btn_row = len(connection_rows)
-        ttk.Button(connection_box, text="Connect", command=self._on_connect_clicked).grid(row=conn_btn_row, column=0, pady=(6, 8), padx=8, sticky="e")
-        ttk.Button(connection_box, text="Disconnect", command=self._on_disconnect_clicked).grid(row=conn_btn_row, column=1, pady=(6, 8), padx=(0, 8), sticky="w")
-        ttk.Button(connection_box, text="Refresh Connection", command=self._on_refresh_connection_clicked).grid(row=conn_btn_row, column=2, pady=(6, 8), padx=(0, 8), sticky="w")
+        self.connect_button = ttk.Button(connection_box, text="Connect", command=self._on_connect_clicked)
+        self.connect_button.grid(row=conn_btn_row, column=0, pady=(6, 8), padx=8, sticky="e")
+        self.disconnect_button = ttk.Button(connection_box, text="Disconnect", command=self._on_disconnect_clicked)
+        self.disconnect_button.grid(row=conn_btn_row, column=1, pady=(6, 8), padx=(0, 8), sticky="w")
+        self.refresh_connection_button = ttk.Button(
+            connection_box,
+            text="Refresh Connection",
+            command=self._on_refresh_connection_clicked,
+        )
+        self.refresh_connection_button.grid(row=conn_btn_row, column=2, pady=(6, 8), padx=(0, 8), sticky="w")
 
         # ---- Polling section ----
         polling_box = ttk.LabelFrame(self.service_form_frame, text="Polling")
@@ -732,14 +826,17 @@ class ConfigPanel(StatePanel):
     def refresh(self):
         """Update config display."""
         try:
-            state = get_config_state(self.logs_dir)
+            state, config_snapshot = self._state("config")
             ts = state.get("ts")
             config = state.get("config", {})
             
-            self.info_label.config(text=f"Last update: {format_timestamp(ts)}")
+            self.info_label.config(
+                text=f"Last update: {format_timestamp(ts)} | {self._snapshot_status(config_snapshot)}"
+            )
             
             if not config:
                 self.system_label.config(text="No config data available")
+                self._poll_retention_estimates()
                 return
             
             # System section
@@ -751,18 +848,22 @@ class ConfigPanel(StatePanel):
             zones = config.get("zones", {})
             
             # Service configuration section (separate state file)
-            svc_state = get_service_config_state(self.logs_dir)
+            svc_state, service_snapshot = self._state("service_config")
             svc_ts = svc_state.get("ts")
             svc_cfg = svc_state.get("config", {})
             zone_names = _normalize_zone_names(svc_cfg.get("zone_names", {})) if isinstance(svc_cfg, dict) else _normalize_zone_names({})
             self._update_zones_config(zones, zone_names)
-            self.service_info_label.config(text=f"Last update: {format_timestamp(svc_ts)}")
+            self.service_info_label.config(
+                text=f"Last update: {format_timestamp(svc_ts)} | {self._snapshot_status(service_snapshot)}"
+            )
             if not svc_cfg:
                 self.service_status_label.config(text="No service config data available", foreground="gray")
             else:
                 self._service_cfg_cache = dict(svc_cfg)
                 if not self._form_dirty:
                     self._populate_service_form(svc_cfg)
+            self._update_retention_estimate(svc_cfg if isinstance(svc_cfg, dict) else None)
+            self._poll_retention_estimates()
         
         except TypeError as e:
             error_msg = f"Type Error - {str(e)}\n{traceback.format_exc()}"
@@ -883,9 +984,10 @@ class ConfigPanel(StatePanel):
         if text == "":
             return None
         try:
-            return float(text)
+            number = float(text)
         except ValueError:
             return None
+        return number if math.isfinite(number) else None
 
     def _safe_int(self, value: str) -> Optional[int]:
         text = str(value).strip()
@@ -906,39 +1008,77 @@ class ConfigPanel(StatePanel):
     def _update_retention_estimate(self, cfg: Optional[Dict[str, Any]] = None):
         cfg = cfg or self._service_cfg_cache
         zones = cfg.get("zones_list", [1, 2, 3, 4, 5, 6]) if cfg.get("zones_mode") == "list" else [1, 2, 3, 4, 5, 6]
+        if not isinstance(zones, (list, tuple)):
+            zones = [1, 2, 3, 4, 5, 6]
         zone_factor = max(1, len(zones)) / 6.0
-        telemetry = estimate_log_storage(
-            self.logs_dir,
-            "cn616a_telemetry_log.jsonl",
-            parse_retention_seconds(self.telemetry_retention.get()),
-            self._safe_float(self.polling_telemetry_hz.get()),
-            self._safe_int(self.max_telemetry_log_bytes.get()),
-            max(800, int(1600 * zone_factor)),
-        )
-        analysis = estimate_log_storage(
-            self.logs_dir,
-            "cn616a_analysis_log.jsonl",
-            parse_retention_seconds(self.analysis_retention.get()),
-            self._safe_float(self.polling_analysis_hz.get()),
-            self._safe_int(self.max_analysis_log_bytes.get()),
-            max(500, int(1000 * zone_factor)),
-        )
-        if telemetry and analysis:
-            self.retention_estimate_label.config(
-                text=(
-                    f"Estimated retention: telemetry {telemetry['file_count']} files, "
-                    f"~{self._format_bytes(telemetry['estimated_bytes'])} data "
-                    f"({self._format_bytes(telemetry['capacity_bytes'])} capacity); "
-                    f"analysis {analysis['file_count']} files, "
-                    f"~{self._format_bytes(analysis['estimated_bytes'])} data "
-                    f"({self._format_bytes(analysis['capacity_bytes'])} capacity). "
-                    "Analysis is an upper-bound estimate because only changed results are logged."
-                )
-            )
-        else:
+        specs = {
+            "telemetry": (
+                "cn616a_telemetry_log.jsonl",
+                parse_retention_seconds(self.telemetry_retention.get()),
+                self._safe_float(self.polling_telemetry_hz.get()),
+                self._safe_int(self.max_telemetry_log_bytes.get()),
+                max(800, int(1600 * zone_factor)),
+            ),
+            "analysis": (
+                "cn616a_analysis_log.jsonl",
+                parse_retention_seconds(self.analysis_retention.get()),
+                self._safe_float(self.polling_analysis_hz.get()),
+                self._safe_int(self.max_analysis_log_bytes.get()),
+                max(500, int(1000 * zone_factor)),
+            ),
+        }
+        specs_changed = specs != self._retention_specs
+        if specs_changed:
+            self._retention_estimates = {}
+        try:
+            self._retention_revision = self._retention_worker.request(specs)
+        except RuntimeError:
+            LOGGER.exception("Retention estimate requested after worker shutdown")
+            return
+        self._retention_specs = specs
+        if specs_changed or not self._retention_estimates:
+            self.retention_estimate_label.config(text="Estimating retention from a bounded log sample…")
+
+    def _poll_retention_estimates(self):
+        for revision, _specs, estimates in self._retention_worker.poll_results():
+            if revision == self._retention_revision:
+                self._retention_estimates = estimates
+                self._render_retention_estimate(estimates)
+
+    def _render_retention_estimate(self, estimates: Dict[str, Any]):
+        if any(estimates.get(key) is None for key in ("telemetry", "analysis")):
             self.retention_estimate_label.config(
                 text="Estimated retention: enter positive durations, polling rates, and file sizes."
             )
+            return
+
+        descriptions = []
+        for key in ("telemetry", "analysis"):
+            estimate = estimates.get(key)
+            if not isinstance(estimate, dict) or estimate.get("error"):
+                descriptions.append(f"{key} estimate unavailable: {estimate.get('error', 'worker error') if isinstance(estimate, dict) else 'invalid inputs'}")
+                continue
+            status = estimate.get("sample_status", "unknown")
+            confidence = "sampled" if estimate.get("file_count_confident") else f"uncertain: {status}"
+            sample_errors = estimate.get("sample_errors") or []
+            error_text = f"; {sample_errors[0][:160]}" if sample_errors else ""
+            descriptions.append(
+                f"{key} {estimate['file_count']} files, "
+                f"~{self._format_bytes(estimate['estimated_bytes'])} data "
+                f"({self._format_bytes(estimate['capacity_bytes'])} capacity; "
+                f"{confidence}, {estimate['sampled_records']} records / "
+                f"{estimate['sampled_bytes']} bytes sampled{error_text})"
+            )
+        self.retention_estimate_label.config(
+            text=(
+                "Estimated retention: " + "; ".join(descriptions) + ". "
+                "Analysis is an upper-bound estimate because only changed results are logged."
+            )
+        )
+
+    def shutdown(self):
+        self._retention_worker.shutdown()
+        super().shutdown()
 
     @staticmethod
     def _format_bytes(value: int) -> str:
@@ -955,53 +1095,86 @@ class ConfigPanel(StatePanel):
             port = int(self._service_cfg_cache.get("last_tcp_port", 8765) or 8765)
         return host, port
 
-    def _send_service_cmd(self, op: str, **fields) -> Dict[str, Any]:
-        host, port = self._get_service_endpoint()
-        msg = {"id": uuid.uuid4().hex[:8], "op": op}
-        msg.update(fields)
-        data = (json.dumps(msg) + "\n").encode("utf-8")
-        with socket.create_connection((host, port), timeout=2.0) as s:
-            s.sendall(data)
-            s.settimeout(2.0)
-            resp = s.recv(65536).decode("utf-8", errors="ignore").strip()
-        return json.loads(resp) if resp else {"ok": False, "error": "empty response"}
-
     def _set_service_status(self, message: str, ok: bool = True):
         self.service_status_label.config(text=message, foreground=("green" if ok else "red"))
+
+    def _set_config_action_pending(self, pending: bool):
+        self._config_action_pending = pending
+        state = "disabled" if pending else "normal"
+        for button in (
+            self.apply_settings_button,
+            self.connect_button,
+            self.disconnect_button,
+            self.refresh_connection_button,
+        ):
+            button.configure(state=state)
 
     def _on_form_edited(self, _event=None):
         if self._form_updating:
             return
         self._form_dirty = True
+        self._edit_revision += 1
         self.service_status_label.config(text="Unsaved changes", foreground="orange")
         self._update_retention_estimate()
 
-    def _apply_service_patch(self, patch: Dict[str, Any], *, notify_viewer: bool = False):
-        if self._form_updating:
+    def _queue_config_commands(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        pending_text: str,
+        success_text: str,
+        notify_viewer: bool = False,
+    ):
+        if self._form_updating or self._config_action_pending:
             return
-        if not patch:
-            return
+        self._set_config_action_pending(True)
+        self._set_service_status(pending_text)
+        edit_revision = self._edit_revision
+
+        def on_result(result):
+            self._set_config_action_pending(False)
+            for outcome in result.get("outcomes", []):
+                response = outcome.get("response", {})
+                cfg = response.get("service_config") if isinstance(response, dict) else None
+                if outcome.get("op") == "set_service_config" and outcome.get("state") == "confirmed_success" and isinstance(cfg, dict):
+                    self._service_cfg_cache = dict(cfg)
+                    if edit_revision == self._edit_revision:
+                        self._populate_service_form(cfg)
+                        self._form_dirty = False
+                    else:
+                        self._form_dirty = True
+                    if notify_viewer and self.on_viewer_config_changed:
+                        self.on_viewer_config_changed(self._extract_viewer_from_cfg(cfg))
+                    if self.on_service_config_changed:
+                        self.on_service_config_changed(cfg)
+
+            summary, succeeded = self._service_result_summary(result)
+            self._set_service_status(success_text if succeeded else summary, ok=succeeded)
+
         try:
-            resp = self._send_service_cmd("set_service_config", patch=patch)
-            if not resp.get("ok"):
-                self._set_service_status(f"Apply failed: {resp.get('error', 'unknown error')}", ok=False)
-                return
+            status = self._submit_service(
+                messages,
+                on_result,
+                endpoint=self._get_service_endpoint(),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._set_config_action_pending(False)
+            self._set_service_status(f"Unable to queue service request: {exc}", ok=False)
+            return
+        if status != "submitted":
+            self._set_config_action_pending(False)
+            self._set_service_status(f"Service request {status}; try again when the service is available", ok=False)
 
-            cfg = resp.get("service_config", {})
-            if isinstance(cfg, dict):
-                self._service_cfg_cache = dict(cfg)
-                self._populate_service_form(cfg)
-
-            self._set_service_status("Settings applied", ok=True)
-            self._form_dirty = False
-
-            if notify_viewer and self.on_viewer_config_changed:
-                viewer = self._extract_viewer_from_cfg(self._service_cfg_cache)
-                self.on_viewer_config_changed(viewer)
-            if self.on_service_config_changed and isinstance(self._service_cfg_cache, dict):
-                self.on_service_config_changed(self._service_cfg_cache)
-        except Exception as e:
-            self._set_service_status(f"Service unreachable: {e}", ok=False)
+    def _apply_service_patch(self, patch: Dict[str, Any], *, notify_viewer: bool = False):
+        if not patch:
+            self._set_service_status("No settings to apply", ok=False)
+            return
+        self._queue_config_commands(
+            [{"op": "set_service_config", "patch": patch}],
+            pending_text="Applying service settings…",
+            success_text="Settings applied",
+            notify_viewer=notify_viewer,
+        )
 
     def _build_polling_patch(self) -> Dict[str, Any]:
         patch: Dict[str, Any] = {}
@@ -1049,25 +1222,11 @@ class ConfigPanel(StatePanel):
                 num = self._safe_int(value)
                 if num is not None:
                     patch[key] = max(1, num)
-        telemetry = estimate_log_storage(
-            self.logs_dir,
-            "cn616a_telemetry_log.jsonl",
-            parse_retention_seconds(self.telemetry_retention.get()),
-            self._safe_float(self.polling_telemetry_hz.get()),
-            self._safe_int(self.max_telemetry_log_bytes.get()),
-            1600,
-        )
-        if telemetry:
+        telemetry = self._retention_estimates.get("telemetry")
+        if isinstance(telemetry, dict) and telemetry.get("file_count_confident"):
             patch["max_telemetry_log_files"] = telemetry["file_count"]
-        analysis = estimate_log_storage(
-            self.logs_dir,
-            "cn616a_analysis_log.jsonl",
-            parse_retention_seconds(self.analysis_retention.get()),
-            self._safe_float(self.polling_analysis_hz.get()),
-            self._safe_int(self.max_analysis_log_bytes.get()),
-            1000,
-        )
-        if analysis:
+        analysis = self._retention_estimates.get("analysis")
+        if isinstance(analysis, dict) and analysis.get("file_count_confident"):
             patch["max_analysis_log_files"] = analysis["file_count"]
         return patch
 
@@ -1146,49 +1305,47 @@ class ConfigPanel(StatePanel):
         return patch
 
     def _on_apply_settings_clicked(self):
+        if self._config_action_pending:
+            return
         combined_patch = {}
         combined_patch.update(self._build_polling_patch())
         combined_patch.update(self._build_log_rotation_patch())
         combined_patch.update(self._build_zones_patch())
         combined_patch.update(self._build_viewer_patch())
-        if not combined_patch:
-            self._set_service_status("No settings to apply", ok=False)
-            return
         self._apply_service_patch(combined_patch, notify_viewer=True)
 
     def _on_connect_clicked(self):
+        if self._config_action_pending:
+            return
         connection_patch = self._build_connection_patch()
-        self._apply_service_patch(connection_patch)
-        try:
-            resp = self._send_service_cmd("connect_serial")
-            if resp.get("ok"):
-                self._set_service_status("Connected", ok=True)
-            else:
-                self._set_service_status(f"Connect failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_service_status(f"Connect failed: {e}", ok=False)
+        self._queue_config_commands(
+            [
+                {"op": "set_service_config", "patch": connection_patch},
+                {"op": "connect_serial"},
+            ],
+            pending_text="Applying connection settings and connecting…",
+            success_text="Connected",
+        )
 
     def _on_disconnect_clicked(self):
-        try:
-            resp = self._send_service_cmd("disconnect_serial")
-            if resp.get("ok"):
-                self._set_service_status("Disconnected", ok=True)
-            else:
-                self._set_service_status(f"Disconnect failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_service_status(f"Disconnect failed: {e}", ok=False)
+        self._queue_config_commands(
+            [{"op": "disconnect_serial"}],
+            pending_text="Disconnecting…",
+            success_text="Disconnected",
+        )
 
     def _on_refresh_connection_clicked(self):
+        if self._config_action_pending:
+            return
         connection_patch = self._build_connection_patch()
-        self._apply_service_patch(connection_patch)
-        try:
-            resp = self._send_service_cmd("refresh_connection")
-            if resp.get("ok"):
-                self._set_service_status("Connection refreshed", ok=True)
-            else:
-                self._set_service_status(f"Refresh failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_service_status(f"Refresh failed: {e}", ok=False)
+        self._queue_config_commands(
+            [
+                {"op": "set_service_config", "patch": connection_patch},
+                {"op": "refresh_connection"},
+            ],
+            pending_text="Applying connection settings and refreshing…",
+            success_text="Connection refreshed",
+        )
 
     def _format_system_config(self, system: Dict) -> str:
         """Format system config for display."""
@@ -1350,13 +1507,28 @@ class RampSoakPanel(StatePanel):
     }
     _CONTROL_MODE_WIRE = {v: k for k, v in _CONTROL_MODE_LABELS.items()}
 
-    def __init__(self, parent, logs_dir: Path, debug: bool = False):
-        super().__init__(parent, logs_dir, debug=debug)
+    def __init__(
+        self,
+        parent,
+        logs_dir: Path,
+        debug: bool = False,
+        service_client: Optional[ServiceClient] = None,
+        snapshot_reader: Optional[StateSnapshotReader] = None,
+    ):
+        super().__init__(
+            parent,
+            logs_dir,
+            debug=debug,
+            service_client=service_client,
+            snapshot_reader=snapshot_reader,
+        )
         self._latest_rampsoak_zones: Dict[str, Any] = {}
         self._zone_token_to_id: Dict[str, str] = {}
         self._segments_dirty = False
         self._num_segments_dirty = False
         self._control_mode_dirty = False
+        self._form_updating = False
+        self._command_pending = False
         self.create_widgets()
 
     def create_widgets(self):
@@ -1407,7 +1579,8 @@ class RampSoakPanel(StatePanel):
         )
         self.control_mode_combo.grid(row=0, column=1, sticky="w", pady=6)
         self.control_mode_combo.bind("<<ComboboxSelected>>", self._on_control_mode_edited)
-        ttk.Button(controls_card, text="Apply Mode", command=self._on_apply_control_mode).grid(
+        self.apply_mode_button = ttk.Button(controls_card, text="Apply Mode", command=self._on_apply_control_mode)
+        self.apply_mode_button.grid(
             row=0, column=2, sticky="w", padx=(6, 20), pady=6
         )
 
@@ -1415,22 +1588,27 @@ class RampSoakPanel(StatePanel):
         self.num_segments_var = tk.StringVar(value="")
         self.num_segments_entry = ttk.Entry(controls_card, textvariable=self.num_segments_var, width=6)
         self.num_segments_entry.grid(row=0, column=4, sticky="w", pady=6)
-        self.num_segments_entry.bind("<KeyRelease>", self._on_num_segments_edited)
+        self.num_segments_var.trace_add("write", self._on_num_segments_edited)
         self.num_segments_entry.bind("<FocusIn>", self._select_all_on_focus)
-        ttk.Button(controls_card, text="Apply Count", command=self._on_apply_num_segments).grid(
+        self.apply_count_button = ttk.Button(controls_card, text="Apply Count", command=self._on_apply_num_segments)
+        self.apply_count_button.grid(
             row=0, column=5, sticky="w", padx=(6, 8), pady=6
         )
 
         button_row = ttk.Frame(controls_card)
         button_row.grid(row=1, column=0, columnspan=6, sticky="w", padx=(8, 6), pady=(0, 8))
-        ttk.Button(button_row, text="Start Profile (this zone)",
-                   command=lambda: self._on_start_stop(True, all_zones=False)).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="Stop Profile (this zone)",
-                   command=lambda: self._on_start_stop(False, all_zones=False)).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Button(button_row, text="Start All Zones",
-                   command=lambda: self._on_start_stop(True, all_zones=True)).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="Stop All Zones",
-                   command=lambda: self._on_start_stop(False, all_zones=True)).pack(side=tk.LEFT)
+        self.profile_buttons = [
+            ttk.Button(button_row, text="Start Profile (this zone)",
+                       command=lambda: self._on_start_stop(True, all_zones=False)),
+            ttk.Button(button_row, text="Stop Profile (this zone)",
+                       command=lambda: self._on_start_stop(False, all_zones=False)),
+            ttk.Button(button_row, text="Start All Zones",
+                       command=lambda: self._on_start_stop(True, all_zones=True)),
+            ttk.Button(button_row, text="Stop All Zones",
+                       command=lambda: self._on_start_stop(False, all_zones=True)),
+        ]
+        for index, button in enumerate(self.profile_buttons):
+            button.pack(side=tk.LEFT, padx=(0, 6 if index < len(self.profile_buttons) - 1 else 0))
 
         # ---- Segment table ----
         table_card = ttk.LabelFrame(self, text="Segments")
@@ -1438,8 +1616,10 @@ class RampSoakPanel(StatePanel):
 
         table_toolbar = ttk.Frame(table_card)
         table_toolbar.pack(fill=tk.X, padx=8, pady=(6, 4))
-        ttk.Button(table_toolbar, text="Reload From Controller", command=self._on_reload_from_controller).pack(side=tk.LEFT)
-        ttk.Button(table_toolbar, text="Save Segment Changes", command=self._on_save_segments).pack(side=tk.LEFT, padx=(8, 0))
+        self.reload_button = ttk.Button(table_toolbar, text="Reload From Controller", command=self._on_reload_from_controller)
+        self.reload_button.pack(side=tk.LEFT)
+        self.save_segments_button = ttk.Button(table_toolbar, text="Save Segment Changes", command=self._on_save_segments)
+        self.save_segments_button.pack(side=tk.LEFT, padx=(8, 0))
         self.table_status_label = ttk.Label(table_toolbar, text="", foreground="gray")
         self.table_status_label.pack(side=tk.LEFT, padx=(16, 0))
 
@@ -1470,19 +1650,19 @@ class RampSoakPanel(StatePanel):
             sp_var = tk.StringVar(value="")
             sp_entry = ttk.Entry(row_frame, textvariable=sp_var, width=14)
             sp_entry.pack(side=tk.LEFT, padx=4)
-            sp_entry.bind("<KeyRelease>", self._on_segment_edited)
+            sp_var.trace_add("write", self._on_segment_edited)
             sp_entry.bind("<FocusIn>", self._select_all_on_focus)
 
             slope_var = tk.StringVar(value="")
             slope_entry = ttk.Entry(row_frame, textvariable=slope_var, width=14)
             slope_entry.pack(side=tk.LEFT, padx=4)
-            slope_entry.bind("<KeyRelease>", self._on_segment_edited)
+            slope_var.trace_add("write", self._on_segment_edited)
             slope_entry.bind("<FocusIn>", self._select_all_on_focus)
 
             time_var = tk.StringVar(value="")
             time_entry = ttk.Entry(row_frame, textvariable=time_var, width=10)
             time_entry.pack(side=tk.LEFT, padx=4)
-            time_entry.bind("<KeyRelease>", self._on_segment_edited)
+            time_var.trace_add("write", self._on_segment_edited)
             time_entry.bind("<FocusIn>", self._select_all_on_focus)
 
             type_label = ttk.Label(row_frame, text="", width=16, anchor="w", foreground="gray")
@@ -1499,23 +1679,20 @@ class RampSoakPanel(StatePanel):
     # Small shared helpers
     # -----------------------------
     def _select_all_on_focus(self, event=None):
-        widget = event.widget if event is not None else None
-        if widget is None:
-            return
-        widget.select_range(0, tk.END)
-        widget.icursor(tk.END)
+        select_all_on_focus(event)
 
     def _safe_float(self, value: Any) -> Optional[float]:
         text = str(value).strip()
         if not text:
             return None
         try:
-            return float(text)
+            number = float(text)
         except ValueError:
             return None
+        return number if math.isfinite(number) else None
 
     def _format_num(self, value: Any) -> str:
-        if isinstance(value, (int, float)):
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
             return f"{float(value):.3f}".rstrip("0").rstrip(".")
         return ""
 
@@ -1531,27 +1708,6 @@ class RampSoakPanel(StatePanel):
     def _set_table_status(self, message: str, *, ok: bool = True):
         self.table_status_label.config(text=message, foreground=("green" if ok else "red"))
 
-    def _get_command_endpoint(self) -> tuple[str, int]:
-        svc_state = get_service_config_state(self.logs_dir)
-        cfg = svc_state.get("config", {}) if isinstance(svc_state, dict) else {}
-        host = str(cfg.get("last_tcp_host", "127.0.0.1") or "127.0.0.1")
-        try:
-            port = int(cfg.get("last_tcp_port", 8765) or 8765)
-        except Exception:
-            port = 8765
-        return host, port
-
-    def _send_command(self, op: str, **fields) -> Dict[str, Any]:
-        host, port = self._get_command_endpoint()
-        msg = {"id": uuid.uuid4().hex[:8], "op": op}
-        msg.update(fields)
-        data = (json.dumps(msg) + "\n").encode("utf-8")
-        with socket.create_connection((host, port), timeout=2.0) as s:
-            s.sendall(data)
-            s.settimeout(2.0)
-            resp = s.recv(65536).decode("utf-8", errors="ignore").strip()
-        return json.loads(resp) if resp else {"ok": False, "error": "empty response"}
-
     def _selected_zone_id(self) -> Optional[str]:
         token = self.zone_var.get().strip()
         if not token:
@@ -1562,6 +1718,22 @@ class RampSoakPanel(StatePanel):
     # Zone selector + population
     # -----------------------------
     def _refresh_zone_selector(self, zone_names: Dict[str, str]):
+        focused = self._safe_focus_get()
+        edit_widgets = [self.num_segments_entry]
+        edit_widgets.extend(
+            widget
+            for row in self.segment_rows
+            for widget in (row["sp_entry"], row["slope_entry"], row["time_entry"])
+        )
+        if (
+            self._command_pending
+            or self._segments_dirty
+            or self._num_segments_dirty
+            or self._control_mode_dirty
+            or focused in edit_widgets
+            or focused is self.control_mode_combo
+        ):
+            return
         zone_ids = sorted(
             [str(z) for z in self._latest_rampsoak_zones.keys()] or [str(z) for z in range(1, 7)],
             key=lambda x: int(x) if str(x).isdigit() else 999,
@@ -1596,27 +1768,40 @@ class RampSoakPanel(StatePanel):
             self._update_live_status()
 
     def _populate_for_zone(self, zone_id: str, *, force: bool = False):
-        zone_data = self._latest_rampsoak_zones.get(str(zone_id), {})
+        zone_data = get_zone(self._latest_rampsoak_zones, zone_id)
         if not isinstance(zone_data, dict):
             zone_data = {}
+        focused = self._safe_focus_get()
+        edit_widgets = [self.num_segments_entry]
+        edit_widgets.extend(
+            widget
+            for row in self.segment_rows
+            for widget in (row["sp_entry"], row["slope_entry"], row["time_entry"])
+        )
+        if not force and focused in edit_widgets:
+            return
 
-        if not self._num_segments_dirty or force:
-            num_segments = zone_data.get("num_segments")
-            self.num_segments_var.set(str(int(num_segments)) if isinstance(num_segments, (int, float)) else "")
+        self._form_updating = True
+        try:
+            if not self._num_segments_dirty or force:
+                num_segments = get_numeric(zone_data, "num_segments", "segment_count")
+                self.num_segments_var.set(str(int(num_segments)) if num_segments is not None else "")
 
-        if not self._segments_dirty or force:
-            segments = zone_data.get("segments", {})
-            segments = segments if isinstance(segments, dict) else {}
-            for idx, row in enumerate(self.segment_rows):
-                seg = segments.get(str(idx + 1), {})
-                seg = seg if isinstance(seg, dict) else {}
-                row["sp_var"].set(self._format_num(seg.get("sp_c")))
-                row["slope_var"].set(self._format_num(seg.get("slope_c_per_min")))
-                row["time_var"].set(self._format_num(seg.get("time_h")))
-            self._segments_dirty = False
+            if not self._segments_dirty or force:
+                segments = get_field(zone_data, "segments", "profile_segments") or {}
+                for idx, row in enumerate(self.segment_rows):
+                    seg = get_zone(segments, idx + 1) if isinstance(segments, dict) else {}
+                    row["sp_var"].set(self._format_num(get_field(seg, "sp_c", "setpoint_c", "setpoint")))
+                    row["slope_var"].set(
+                        self._format_num(get_field(seg, "slope_c_per_min", "slope", "rate_c_per_min"))
+                    )
+                    row["time_var"].set(self._format_num(get_field(seg, "time_h", "time", "duration_h")))
+                self._segments_dirty = False
 
-        if force:
-            self._num_segments_dirty = False
+            if force:
+                self._num_segments_dirty = False
+        finally:
+            self._form_updating = False
 
         self._refresh_type_hints()
         self._apply_active_row_styling()
@@ -1663,36 +1848,44 @@ class RampSoakPanel(StatePanel):
             self.live_status_label.config(text="")
             return
 
-        telem = get_telemetry_state(self.logs_dir)
-        zones = ((telem or {}).get("telemetry", {}) or {}).get("zones", {})
-        zdata = zones.get(str(zone_id), {}) if isinstance(zones, dict) else {}
+        telem, snapshot = self._state("telemetry")
+        zones = get_zones(telem, "telemetry")
+        zdata = get_zone(zones, zone_id)
 
-        seg_idx = safe_get(zdata, "current_segment_index", default="N/A")
-        seg_state = safe_get(zdata, "current_segment_state", default="N/A")
-        control_mode = safe_get(zdata, "control_mode", default="N/A")
-        loop_status = safe_get(zdata, "loop_status", default="N/A")
-        remaining = safe_get(zdata, "ramp_soak_remaining", default=None)
-        remaining_txt = f"{float(remaining):.2f}\u00b0C" if isinstance(remaining, (int, float)) else "N/A"
+        seg_idx = get_field(zdata, "current_segment_index", "segment_index", "ramp_soak_segment")
+        seg_state = get_field(zdata, "current_segment_state", "segment_state")
+        control_mode = get_field(zdata, "control_mode", "control_method", "mode")
+        loop_status = get_field(zdata, "loop_status", "status")
+        seg_idx = "N/A" if seg_idx is None else seg_idx
+        seg_state = "N/A" if seg_state is None else seg_state
+        control_mode = "N/A" if control_mode is None else control_mode
+        loop_status = "N/A" if loop_status is None else loop_status
+        remaining = get_numeric(zdata, "ramp_soak_remaining", "ramp_soak_remaining_s", "remaining_s")
+        remaining_txt = f"{remaining:.2f}\u00b0C" if remaining is not None else "N/A"
 
         self.live_status_label.config(
-            text=(f"Current Segment: {seg_idx} ({seg_state})    Control Mode: {control_mode}    "
+            text=(f"{self._snapshot_status(snapshot)} | Current Segment: {seg_idx} ({seg_state})    Control Mode: {control_mode}    "
                   f"Loop Status: {loop_status}    Ramp/Soak Remaining: {remaining_txt}")
         )
 
-        if not self._control_mode_dirty:
+        if not self._control_mode_dirty and self._safe_focus_get() is not self.control_mode_combo:
             label = self._CONTROL_MODE_LABELS.get(str(control_mode).strip().upper())
-            if label:
+            if label and label != self.control_mode_var.get():
                 self.control_mode_var.set(label)
 
     # -----------------------------
     # Edit tracking
     # -----------------------------
-    def _on_segment_edited(self, _event=None):
+    def _on_segment_edited(self, *_args):
+        if self._form_updating:
+            return
         self._segments_dirty = True
         self._set_table_status("Unsaved segment edits", ok=True)
         self._refresh_type_hints()
 
-    def _on_num_segments_edited(self, _event=None):
+    def _on_num_segments_edited(self, *_args):
+        if self._form_updating:
+            return
         self._num_segments_dirty = True
         self._set_status("Unsaved segment-count edit", ok=True)
 
@@ -1703,6 +1896,8 @@ class RampSoakPanel(StatePanel):
     # Actions
     # -----------------------------
     def _on_apply_control_mode(self):
+        if self._command_pending:
+            return
         zone_id = self._selected_zone_id()
         if not zone_id:
             self._set_status("Select a zone first", ok=False)
@@ -1711,17 +1906,22 @@ class RampSoakPanel(StatePanel):
         if wire is None:
             self._set_status("Choose a control mode first", ok=False)
             return
-        try:
-            resp = self._send_command("set_control_mode", zone=int(zone_id), mode=wire)
-            if resp.get("ok"):
+        def completed(_result, summary, succeeded):
+            if succeeded:
                 self._control_mode_dirty = False
                 self._set_status(f"Zone {zone_id} control mode updated", ok=True)
             else:
-                self._set_status(f"Failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+                self._set_status(summary, ok=False)
+
+        self._queue_ramp_command(
+            {"op": "set_control_mode", "zone": int(zone_id), "mode": wire},
+            "Applying control mode…",
+            completed,
+        )
 
     def _on_apply_num_segments(self):
+        if self._command_pending:
+            return
         zone_id = self._selected_zone_id()
         if not zone_id:
             self._set_status("Select a zone first", ok=False)
@@ -1730,18 +1930,23 @@ class RampSoakPanel(StatePanel):
         if count is None or count != int(count) or not (0 <= count <= 20):
             self._set_status("Number of segments must be a whole number from 0 to 20", ok=False)
             return
-        try:
-            resp = self._send_command("set_num_segments", zone=int(zone_id), count=int(count))
-            if resp.get("ok"):
+        def completed(_result, summary, succeeded):
+            if succeeded:
                 self._num_segments_dirty = False
                 self._apply_active_row_styling()
                 self._set_status(f"Zone {zone_id} segment count set to {int(count)}", ok=True)
             else:
-                self._set_status(f"Failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+                self._set_status(summary, ok=False)
+
+        self._queue_ramp_command(
+            {"op": "set_num_segments", "zone": int(zone_id), "count": int(count)},
+            "Applying segment count…",
+            completed,
+        )
 
     def _on_start_stop(self, enable: bool, *, all_zones: bool):
+        if self._command_pending:
+            return
         if all_zones:
             zones = sorted((int(z) for z in self._zone_token_to_id.values()), key=int) or list(range(1, 7))
         else:
@@ -1750,39 +1955,49 @@ class RampSoakPanel(StatePanel):
                 self._set_status("Select a zone first", ok=False)
                 return
             zones = [int(zone_id)]
-        try:
-            resp = self._send_command("set_start_profile", zones=zones, enable=enable)
-            if resp.get("ok"):
+        def completed(_result, summary, succeeded):
+            if succeeded:
                 action = "started" if enable else "stopped"
                 target = "all zones" if all_zones else f"zone {zones[0]}"
                 self._set_status(f"Ramp/Soak {action} for {target}", ok=True)
             else:
-                self._set_status(f"Failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_status(f"Service unreachable: {e}", ok=False)
+                self._set_status(summary, ok=False)
+
+        self._queue_ramp_command(
+            {"op": "set_start_profile", "zones": zones, "enable": enable},
+            "Updating Ramp/Soak profile…",
+            completed,
+        )
 
     def _on_reload_from_controller(self):
-        try:
-            resp = self._send_command("read_rampsoak")
-        except Exception as e:
-            self._set_table_status(f"Service unreachable: {e}", ok=False)
-            return
-        if not resp.get("ok"):
-            self._set_table_status(f"Reload failed: {resp.get('error', 'unknown error')}", ok=False)
+        if self._command_pending:
             return
 
-        state = get_rampsoak_state(self.logs_dir)
-        zones = ((state or {}).get("rampsoak", {}) or {}).get("zones", {})
-        self._latest_rampsoak_zones = zones if isinstance(zones, dict) else {}
+        def completed(_result, summary, succeeded):
+            if not succeeded:
+                self._set_table_status(summary, ok=False)
+                return
+            state, _snapshot = self._state("rampsoak")
+            self._latest_rampsoak_zones = get_zones(state, "rampsoak")
+            zone_id = self._selected_zone_id()
+            if zone_id:
+                if not (self._segments_dirty or self._num_segments_dirty):
+                    self._populate_for_zone(zone_id, force=True)
+                else:
+                    self._set_table_status("Reloaded; local edits retained", ok=True)
+                    return
+            self._set_table_status("Reloaded from controller", ok=True)
 
-        zone_id = self._selected_zone_id()
-        if zone_id:
-            self._segments_dirty = False
-            self._num_segments_dirty = False
-            self._populate_for_zone(zone_id, force=True)
-        self._set_table_status("Reloaded from controller", ok=True)
+        self._queue_ramp_command(
+            {"op": "read_rampsoak"},
+            "Reloading Ramp/Soak data…",
+            completed,
+            table=True,
+        )
 
     def _on_save_segments(self):
+        if self._command_pending:
+            return
         zone_id = self._selected_zone_id()
         if not zone_id:
             self._set_table_status("Select a zone first", ok=False)
@@ -1805,15 +2020,58 @@ class RampSoakPanel(StatePanel):
             self._set_table_status("No segment values to save", ok=False)
             return
 
-        try:
-            resp = self._send_command("set_rampsoak_segments", zone=int(zone_id), segments=segments)
-            if resp.get("ok"):
+        def completed(_result, summary, succeeded):
+            if succeeded:
                 self._segments_dirty = False
                 self._set_table_status(f"Saved {len(segments)} segment(s) to zone {zone_id}", ok=True)
             else:
-                self._set_table_status(f"Save failed: {resp.get('error', 'unknown error')}", ok=False)
-        except Exception as e:
-            self._set_table_status(f"Service unreachable: {e}", ok=False)
+                self._set_table_status(summary, ok=False)
+
+        self._queue_ramp_command(
+            {"op": "set_rampsoak_segments", "zone": int(zone_id), "segments": segments},
+            "Saving Ramp/Soak segments…",
+            completed,
+            table=True,
+        )
+
+    def _set_ramp_command_pending(self, pending: bool):
+        self._command_pending = pending
+        state = "disabled" if pending else "normal"
+        for button in (
+            self.apply_mode_button,
+            self.apply_count_button,
+            *self.profile_buttons,
+            self.reload_button,
+            self.save_segments_button,
+        ):
+            button.configure(state=state)
+        self.zone_combo.configure(state="disabled" if pending else "readonly")
+        for widget in (
+            self.control_mode_combo,
+            self.num_segments_entry,
+            *(entry for row in self.segment_rows for entry in (row["sp_entry"], row["slope_entry"], row["time_entry"])),
+        ):
+            widget.configure(state="disabled" if pending else ("readonly" if widget is self.control_mode_combo else "normal"))
+
+    def _queue_ramp_command(self, message: Dict[str, Any], pending_text: str, callback, *, table: bool = False):
+        self._set_ramp_command_pending(True)
+        status_setter = self._set_table_status if table else self._set_status
+        status_setter(pending_text)
+
+        def on_result(result):
+            self._set_ramp_command_pending(False)
+            summary, succeeded = self._service_result_summary(result)
+            callback(result, summary, succeeded)
+
+        try:
+            status = self._submit_service([message], on_result)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._set_ramp_command_pending(False)
+            status_setter(f"Unable to queue service request: {exc}", ok=False)
+            return
+        if status != "submitted":
+            self._set_ramp_command_pending(False)
+            status_setter(f"Service request {status}; no command was sent", ok=False)
 
     # -----------------------------
     # Lifecycle hooks
@@ -1827,23 +2085,30 @@ class RampSoakPanel(StatePanel):
 
     def refresh(self):
         """Periodic refresh: updates live status and zone list; never overwrites unsaved edits."""
+        if self._command_pending:
+            return
         try:
             focused = self._safe_focus_get()
             if focused == self.zone_combo:
                 return
 
-            state = get_rampsoak_state(self.logs_dir)
+            state, ramp_snapshot = self._state("rampsoak")
             ts = state.get("ts") if isinstance(state, dict) else None
-            rampsoak = state.get("rampsoak", {}) if isinstance(state, dict) else {}
-            zones = rampsoak.get("zones", {}) if isinstance(rampsoak, dict) else {}
-            self._latest_rampsoak_zones = zones if isinstance(zones, dict) else {}
+            self._latest_rampsoak_zones = get_zones(state, "rampsoak")
+            zones = self._latest_rampsoak_zones
 
             if zones:
-                self.info_label.config(text=f"Last update: {format_timestamp(ts)}")
+                self.info_label.config(
+                    text=f"Last update: {format_timestamp(ts)} | {self._snapshot_status(ramp_snapshot)}"
+                )
             else:
-                self.info_label.config(text="No ramp/soak data yet - open this tab to fetch it from the controller")
+                self.info_label.config(
+                    text=f"No ramp/soak data yet - open this tab to fetch it from the controller | "
+                         f"{self._snapshot_status(ramp_snapshot)}"
+                )
 
-            zone_names = _load_zone_names_from_logs(self.logs_dir)
+            service_state, _service_snapshot = self._state("service_config")
+            zone_names = _load_zone_names_from_state(service_state)
             self._refresh_zone_selector(zone_names)
 
             zone_id = self._selected_zone_id()
