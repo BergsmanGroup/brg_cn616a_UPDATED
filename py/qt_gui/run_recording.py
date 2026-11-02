@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -39,6 +39,8 @@ RecoverySimulator = Callable[[], Mapping[str, object] | None]
 
 class RunRecordingCard(QWidget):
     """Run recording is distinct from controller Run/Idle and profile execution."""
+
+    status_summary_changed = Signal(object)
 
     def __init__(
         self,
@@ -359,6 +361,7 @@ class RunRecordingCard(QWidget):
         if self._run_status is None:
             text = self._status_error or "Recording status unknown — waiting for service status."
             self.status_label.setText(text)
+            self.status_summary_changed.emit(self.status_summary())
             return
         status = self._run_status
         active = status.get("run_active") is True
@@ -404,6 +407,17 @@ class RunRecordingCard(QWidget):
             if age > 5.0:
                 lines.append(f"Status is stale ({int(age)} s since last response).")
         self.status_label.setText("\n".join(lines))
+        self.status_summary_changed.emit(self.status_summary())
+
+    def status_summary(self) -> dict[str, object]:
+        return {
+            "status": dict(self._run_status) if self._run_status is not None else None,
+            "error": self._status_error,
+            "simulated": (
+                self._adapter_status is not None
+                and self._adapter_status.mode == "offline-replay"
+            ),
+        }
 
     def shutdown(self) -> None:
         self._timer.stop()

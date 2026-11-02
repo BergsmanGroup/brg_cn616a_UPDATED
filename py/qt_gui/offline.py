@@ -22,12 +22,14 @@ from .adapter import (
     CommandOutcome,
     ControllerIdentity,
     ControllerKey,
+    PROFILE_EXECUTION_OPERATIONS,
     READ_ONLY_OPERATIONS,
     RUN_CONTROL_OPERATIONS,
     SERVICE_CONFIGURATION_OPERATIONS,
     SnapshotCategory,
     SubmissionStatus,
     ZoneKey,
+    messages_match_profile_zones,
     messages_match_zone,
     new_session_generation,
     normalize_snapshot,
@@ -343,6 +345,9 @@ class OfflineReplaySession:
         service_configuration = bool(operations) and all(
             operation in SERVICE_CONFIGURATION_OPERATIONS for operation in operations
         )
+        profile_execution = bool(operations) and all(
+            operation in PROFILE_EXECUTION_OPERATIONS for operation in operations
+        )
         if any("unit" in message for message in messages):
             return self._reject_mock(
                 messages,
@@ -364,6 +369,14 @@ class OfflineReplaySession:
                 messages,
                 target,
                 "Recording and schedule commands are service-level operations, not zone commands.",
+            )
+        if profile_execution and (
+            target is None or not messages_match_profile_zones(messages, target)
+        ):
+            return self._reject_mock(
+                messages,
+                target,
+                "Profile start/stop requires a verified controller target and an explicit valid zone list.",
             )
 
         if service_configuration:
@@ -412,7 +425,11 @@ class OfflineReplaySession:
         if mutation and not run_control and (
             target is None
             or self.status.target is None
-            or not messages_match_zone(messages, target)
+            or not (
+                messages_match_profile_zones(messages, target)
+                if profile_execution
+                else messages_match_zone(messages, target)
+            )
         ):
             return self._reject_mock(
                 messages,
@@ -447,7 +464,12 @@ class OfflineReplaySession:
     def _simulate_profile_command(self, message: Mapping[str, object]) -> None:
         operation = str(message.get("op", ""))
         timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-        if operation in {"read_rampsoak", "set_num_segments", "set_rampsoak_segments"}:
+        if operation in {
+            "read_rampsoak",
+            "set_num_segments",
+            "set_rampsoak_segments",
+            "set_start_profile",
+        }:
             snapshot = dict(self._snapshot_data["rampsoak"])
             section_raw = snapshot.get("rampsoak")
             section = dict(section_raw) if isinstance(section_raw, Mapping) else {}
@@ -474,23 +496,47 @@ class OfflineReplaySession:
                     segments.update(dict(segments_raw))
                     zone["segments"] = segments
                     zones[str(zone_id)] = zone
+            elif operation == "set_start_profile":
+                raw_zones = message.get("zones")
+                enable = message.get("enable")
+                if isinstance(raw_zones, (list, tuple)) and isinstance(enable, bool):
+                    for zone_id in raw_zones:
+                        if isinstance(zone_id, int) and not isinstance(zone_id, bool):
+                            zone = dict(zones.get(str(zone_id), {}))
+                            zone["start_profile"] = "ENABLE" if enable else "DISABLE"
+                            zones[str(zone_id)] = zone
             section["zones"] = zones
             snapshot["rampsoak"] = section
             snapshot["ts"] = timestamp
             self._snapshot_data["rampsoak"] = snapshot
-        elif operation == "set_control_mode":
-            zone_id = message.get("zone")
-            mode = message.get("mode")
-            if not isinstance(zone_id, int) or isinstance(zone_id, bool) or not isinstance(mode, str):
+        elif operation in {"set_control_mode", "start_autotune", "stop_autotune"}:
+            if operation == "set_control_mode":
+                raw_zones = [message.get("zone")]
+                field = "control_mode"
+                value = message.get("mode")
+            elif operation == "start_autotune":
+                raw_zones = message.get("zones")
+                field = "autotune_enable"
+                value = "ENABLE"
+            else:
+                raw_zones = [message.get("zone")]
+                field = "autotune_enable"
+                value = "DISABLE"
+            if not isinstance(raw_zones, (list, tuple)):
+                return
+            if not isinstance(value, str):
                 return
             snapshot = dict(self._snapshot_data["telemetry"])
             section_raw = snapshot.get("telemetry")
             section = dict(section_raw) if isinstance(section_raw, Mapping) else {}
             zones_raw = section.get("zones")
             zones = dict(zones_raw) if isinstance(zones_raw, Mapping) else {}
-            zone = dict(zones.get(str(zone_id), {}))
-            zone["control_mode"] = mode
-            zones[str(zone_id)] = zone
+            for zone_id in raw_zones:
+                if not isinstance(zone_id, int) or isinstance(zone_id, bool):
+                    continue
+                zone = dict(zones.get(str(zone_id), {}))
+                zone[field] = value
+                zones[str(zone_id)] = zone
             section["zones"] = zones
             snapshot["telemetry"] = section
             snapshot["ts"] = timestamp

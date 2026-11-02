@@ -24,12 +24,14 @@ from .adapter import (
     AdapterStatus,
     CommandOutcome,
     ControllerIdentity,
+    PROFILE_EXECUTION_OPERATIONS,
     READ_ONLY_OPERATIONS,
     RUN_CONTROL_OPERATIONS,
     SERVICE_CONFIGURATION_OPERATIONS,
     SnapshotCategory,
     SubmissionStatus,
     ZoneKey,
+    messages_match_profile_zones,
     messages_match_zone,
     new_session_generation,
     normalize_snapshot,
@@ -214,6 +216,9 @@ class QtServiceAdapter(QObject):
         service_configuration = bool(copied) and all(
             str(message["op"]) in SERVICE_CONFIGURATION_OPERATIONS for message in copied
         )
+        profile_execution = bool(copied) and all(
+            str(message["op"]) in PROFILE_EXECUTION_OPERATIONS for message in copied
+        )
         if run_control and target is not None:
             return self._reject(
                 messages,
@@ -225,6 +230,14 @@ class QtServiceAdapter(QObject):
                 messages,
                 target,
                 "Configuration and connection commands are service-level operations, not zone commands.",
+            )
+        if profile_execution and (
+            target is None or not messages_match_profile_zones(copied, target)
+        ):
+            return self._reject(
+                messages,
+                target,
+                "Profile start/stop requires a verified controller target and an explicit valid zone list.",
             )
         if target is not None and not self._target_matches(target):
             return self._reject(messages, target, "Command target is unknown or belongs to another controller.")
@@ -238,8 +251,14 @@ class QtServiceAdapter(QObject):
                 return self._reject(messages, target, "Service/controller is not ready for writes.")
             if not run_control and not service_configuration and target is None:
                 return self._reject(messages, target, "Controller identity is unknown; writes are disabled.")
-            if not run_control and not service_configuration and not self._messages_match_target(copied, target):
-                return self._reject(messages, target, "Command payload does not match the selected zone target.")
+            if not run_control and not service_configuration:
+                payload_matches_target = (
+                    messages_match_profile_zones(copied, target)
+                    if profile_execution and target is not None
+                    else self._messages_match_target(copied, target)
+                )
+                if not payload_matches_target:
+                    return self._reject(messages, target, "Command payload does not match the selected zone target.")
 
         self._next_submission += 1
         submission_id = self._next_submission

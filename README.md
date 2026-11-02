@@ -138,10 +138,16 @@ Configuration now includes controller/system readbacks, service settings,
 retention estimates, and explicit Apply/connect/disconnect/refresh actions.
 Stored TCP endpoint fields do not switch the GUI's already selected endpoint.
 The Ramp/Soak tab supports reading and editing the 20-row profile, active
-segment count, and control mode through the adapter; profile start/stop remains
-unavailable. The Logs tab is still incomplete. Without an explicit
-mode, the shell is disconnected and read-only and does not probe a service
-endpoint. Offline replay never falls back to a normal service endpoint.
+segment count, and control mode through the adapter. Profile start/stop and
+autotune actions require target-specific confirmation and show unresolved
+outcomes separately from available status readbacks. Offline actions are
+simulated only. Logs provides source/category selection, bounded background
+tails for service diagnostics and JSONL records, a recording-status summary,
+recent service activity, and uncaught GUI exceptions. Initial loads read at
+most 512 KiB, subsequent refreshes at most 128 KiB, and the view retains at
+most 5,000 rows; missing, malformed, and oversized data is surfaced. Without
+an explicit mode, the shell is disconnected and read-only and does not probe a
+service endpoint. Offline replay never falls back to a normal service endpoint.
 
 An explicit service mode is available for later user testing against an already
 running service. Set these PowerShell environment variables to the endpoint and
@@ -178,6 +184,9 @@ heating or profile execution. Use
 [Step 05 report](docs/reports/qt-gui-step-05.md) has the offline control
 walkthrough and test evidence. The [Step 06 report](docs/reports/qt-gui-step-06.md)
 has the recording and schedule walkthrough and contract-test evidence.
+The [Step 10 report](docs/reports/qt-gui-step-10.md) documents Logs and
+diagnostics; the [Step 11 reliability report](docs/reports/qt-gui-step-11.md)
+records the measured offscreen exercise and remaining UI/hardware gates.
 
 The feature list below describes the existing Tk GUI; Qt migration is in
 progress.

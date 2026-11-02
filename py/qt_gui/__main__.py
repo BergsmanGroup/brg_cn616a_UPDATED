@@ -48,6 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         from PySide6.QtWidgets import QApplication
 
+        from .logs import install_gui_exception_hooks
         from .offline import OfflineReplaySession
         from .window import QtMainWindow
         if args.service:
@@ -64,6 +65,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication(["cn616a-qt-gui"])
     app.setApplicationName("CN616A Qt GUI")
+    install_gui_exception_hooks()
     if args.offline_replay:
         session = OfflineReplaySession()
     elif args.service:

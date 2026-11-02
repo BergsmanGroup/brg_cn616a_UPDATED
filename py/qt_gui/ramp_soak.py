@@ -211,6 +211,9 @@ class RampSoakPage(QWidget):
         self._count_dirty = False
         self._mode_dirty = False
         self._pending_operations: set[str] = set()
+        self._pending_trigger_key: str | None = None
+        self._pending_profile_zones: tuple[int, ...] = ()
+        self._unresolved_triggers: dict[str, str] = {}
         self._snapshot_signatures: dict[str, tuple[object, ...]] = {}
         self._request_signature: tuple[object, ...] | None = None
         self._awaiting_category: str | None = None
@@ -226,6 +229,21 @@ class RampSoakPage(QWidget):
         self.save_button.clicked.connect(self._save_segments)
         self.apply_count_button.clicked.connect(self._apply_count)
         self.apply_mode_button.clicked.connect(self._apply_mode)
+        self.start_selected_button.clicked.connect(
+            lambda: self._start_stop_profile(True, all_monitored=False)
+        )
+        self.stop_selected_button.clicked.connect(
+            lambda: self._start_stop_profile(False, all_monitored=False)
+        )
+        self.start_monitored_button.clicked.connect(
+            lambda: self._start_stop_profile(True, all_monitored=True)
+        )
+        self.stop_monitored_button.clicked.connect(
+            lambda: self._start_stop_profile(False, all_monitored=True)
+        )
+        self.start_autotune_button.clicked.connect(self._start_autotune)
+        self.stop_autotune_button.clicked.connect(self._stop_autotune)
+        self.acknowledge_unknown_button.clicked.connect(self._acknowledge_unknown)
         self._refresh_action_states()
 
     def _build_ui(self) -> None:
@@ -273,6 +291,42 @@ class RampSoakPage(QWidget):
         controls.addStretch(1)
         layout.addLayout(controls)
 
+        self.profile_execution_label = QLabel("Profile execution readback: unavailable.")
+        self.profile_execution_label.setWordWrap(True)
+        layout.addWidget(self.profile_execution_label)
+        profile_actions = QHBoxLayout()
+        self.start_selected_button = QPushButton("Start selected zone")
+        self.stop_selected_button = QPushButton("Stop selected zone")
+        self.start_monitored_button = QPushButton("Start all monitored zones")
+        self.stop_monitored_button = QPushButton("Stop all monitored zones")
+        for button in (
+            self.start_selected_button,
+            self.stop_selected_button,
+            self.start_monitored_button,
+            self.stop_monitored_button,
+        ):
+            profile_actions.addWidget(button)
+        profile_actions.addStretch(1)
+        layout.addLayout(profile_actions)
+
+        autotune_info = QHBoxLayout()
+        self.autotune_state_label = QLabel("Autotune state: unavailable.")
+        self.autotune_state_label.setWordWrap(True)
+        self.autotune_setpoint_label = QLabel(
+            "Autotune SP: unavailable (a setpoint, not a start trigger)."
+        )
+        self.autotune_setpoint_label.setWordWrap(True)
+        autotune_info.addWidget(self.autotune_state_label, 1)
+        autotune_info.addWidget(self.autotune_setpoint_label, 1)
+        layout.addLayout(autotune_info)
+        autotune_actions = QHBoxLayout()
+        self.start_autotune_button = QPushButton("Start autotune — selected zone")
+        self.stop_autotune_button = QPushButton("Stop autotune — selected zone")
+        autotune_actions.addWidget(self.start_autotune_button)
+        autotune_actions.addWidget(self.stop_autotune_button)
+        autotune_actions.addStretch(1)
+        layout.addLayout(autotune_actions)
+
         self.profile_model = ProfileTableModel(self)
         self.profile_table = QTableView()
         self.profile_table.setObjectName("rampSoakProfileTable")
@@ -302,6 +356,13 @@ class RampSoakPage(QWidget):
         self.status_label.setObjectName("rampSoakStatus")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
+        self.uncertainty_label = QLabel("")
+        self.uncertainty_label.setObjectName("rampSoakUncertainty")
+        self.uncertainty_label.setWordWrap(True)
+        self.uncertainty_label.setStyleSheet("color: #8b1e1e; font-weight: 700;")
+        layout.addWidget(self.uncertainty_label)
+        self.acknowledge_unknown_button = QPushButton("Acknowledge unresolved outcome")
+        layout.addWidget(self.acknowledge_unknown_button)
 
     def set_adapter_status(self, status: AdapterStatus | None, *, writes_allowed: bool) -> None:
         self._status = status
@@ -368,9 +429,32 @@ class RampSoakPage(QWidget):
                     f"{simulated}{operation} acknowledged; readback is not yet verified. "
                     "Use Reload from service to verify."
                 )
+            self._pending_trigger_key = None
         else:
             self._awaiting_readback = False
-            self.status_label.setText(f"{operation}: {outcome.result} — {outcome.message}")
+            if outcome.result == "unknown" and self._pending_trigger_key is not None:
+                self._unresolved_triggers[self._pending_trigger_key] = (
+                    f"{self._pending_trigger_key}: outcome unknown after send; it may have "
+                    "executed. Status snapshots cannot prove whether the trigger ran. "
+                    "No retry was made."
+                )
+                self._pending_trigger_key = None
+                self._refresh_uncertainty()
+            if (
+                operation == "set_start_profile"
+                and len(self._pending_profile_zones) > 1
+                and outcome.result == "confirmed_failure"
+            ):
+                detail = (
+                    "The service rejected/failed the multi-zone request; some earlier zone "
+                    "writes may have applied. Inspect fresh per-zone readbacks before any "
+                    "further action. No retry was made."
+                )
+            else:
+                detail = outcome.message
+            self.status_label.setText(f"{operation}: {outcome.result} — {detail}")
+            self._pending_trigger_key = None
+        self._pending_profile_zones = ()
         self._refresh_action_states()
 
     def on_tab_selected(self) -> None:
@@ -485,6 +569,12 @@ class RampSoakPage(QWidget):
         )
         telemetry_zones = get_zones(telemetry_data, "telemetry")
         telemetry_zone = get_zone(telemetry_zones, self._selected_zone_id)
+        telemetry_fresh = (
+            telemetry_snapshot is not None
+            and telemetry_snapshot.data is not None
+            and telemetry_snapshot.error is None
+            and not telemetry_snapshot.stale
+        )
         mode = get_field(telemetry_zone, "control_mode", "control_method", "mode")
         if force or not self._mode_dirty:
             mode_index = self.control_mode.findData(str(mode).strip().upper()) if mode is not None else -1
@@ -494,7 +584,72 @@ class RampSoakPage(QWidget):
             finally:
                 self._updating = False
         self._update_live_status()
+        self._update_execution_status(
+            zone_data,
+            telemetry_zone,
+            execution_readback_fresh=(
+                ramp_snapshot is not None
+                and ramp_snapshot.data is not None
+                and ramp_snapshot.error is None
+                and not ramp_snapshot.stale
+                and telemetry_fresh
+            ),
+            telemetry_readback_fresh=telemetry_fresh,
+        )
         self._refresh_action_states()
+
+    def _update_execution_status(
+        self,
+        ramp_zone: Mapping[str, object],
+        telemetry_zone: Mapping[str, object],
+        *,
+        execution_readback_fresh: bool,
+        telemetry_readback_fresh: bool,
+    ) -> None:
+        profile_state = get_field(ramp_zone, "start_profile")
+        profile_text = (
+            str(profile_state).strip().upper()
+            if profile_state is not None
+            else "unknown"
+        )
+        self.profile_execution_label.setText(
+            f"Profile execution readback for zone {self._selected_zone_id}: {profile_text}. "
+            "This is the controller's profile-enable field, not a fabricated Run/Idle or pause state."
+        )
+        self._profile_readback_fresh = execution_readback_fresh
+        self._profile_enable_state = profile_text
+        autotune_state = get_field(telemetry_zone, "autotune_enable", "autotune_enabled")
+        autotune_text = (
+            str(autotune_state).strip().upper()
+            if autotune_state is not None
+            else "unknown"
+        )
+        autotune_sp = get_numeric(
+            telemetry_zone,
+            "autotune_sp_c",
+            "autotune_sp",
+            "sp_autotune_c",
+            "sp_autotune",
+            "SP_autotune",
+        )
+        self.autotune_state_label.setText(
+            f"Autotune state for zone {self._selected_zone_id}: {autotune_text}."
+        )
+        self._autotune_readback_fresh = telemetry_readback_fresh
+        self._autotune_enable_state = autotune_text
+        self.autotune_setpoint_label.setText(
+            "Autotune SP: "
+            + (f"{autotune_sp:g} °C" if autotune_sp is not None else "unknown")
+            + "; this target is distinct from the start/stop trigger."
+        )
+
+    def _refresh_uncertainty(self) -> None:
+        if self._unresolved_triggers:
+            self.uncertainty_label.setText(
+                "\n".join(self._unresolved_triggers.values())
+            )
+        else:
+            self.uncertainty_label.clear()
 
     def _update_live_status(self) -> None:
         telemetry_snapshot = self._snapshots.get("telemetry")
@@ -620,6 +775,139 @@ class RampSoakPage(QWidget):
             "Applying control mode…",
         )
 
+    def _monitored_zone_ids(self) -> list[int]:
+        snapshot = self._snapshots.get("service_config")
+        data = dict(snapshot.data) if snapshot is not None and snapshot.data is not None else None
+        config = get_field(data, "config", "service_config")
+        mode = get_field(config, "zones_mode")
+        if mode == "all":
+            return list(range(1, 7))
+        if mode != "list":
+            raise ValueError("The monitored-zone configuration is unavailable or invalid.")
+        raw_zones = get_field(config, "zones_list")
+        if not isinstance(raw_zones, (list, tuple)) or not raw_zones:
+            raise ValueError("The monitored-zone list is empty; no profile trigger was sent.")
+        zones: list[int] = []
+        for zone in raw_zones:
+            if isinstance(zone, bool) or not isinstance(zone, int) or not 1 <= zone <= 6:
+                raise ValueError("The monitored-zone list contains an invalid zone; no trigger was sent.")
+            if zone not in zones:
+                zones.append(zone)
+        return zones
+
+    def _start_stop_profile(self, enable: bool, *, all_monitored: bool) -> None:
+        if all_monitored:
+            try:
+                zones = self._monitored_zone_ids()
+            except ValueError as exc:
+                self.status_label.setText(str(exc))
+                return
+            target_description = "all monitored zones " + ", ".join(map(str, zones))
+        else:
+            zones = [self._selected_zone_id]
+            target_description = f"selected zone {self._selected_zone_id}"
+        action = "START" if enable else "STOP"
+        wire_value = "ENABLE" if enable else "DISABLE"
+        choice = QMessageBox.question(
+            self,
+            f"Confirm profile {action.lower()}",
+            f"{action} the Ramp/Soak profile for {target_description}?\n\n"
+            f"This sends set_start_profile with zones={zones} and enable={wire_value}. "
+            "It can change controller output behavior. The GUI cannot infer pause/resume "
+            "or a separate hardware Run/Idle state.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            self.status_label.setText(f"Profile {action.lower()} canceled; no command was sent.")
+            return
+        target = self._target()
+        if target is None:
+            self.status_label.setText("Controller identity is unknown; no profile trigger was sent.")
+            return
+        target = ZoneKey(target.bus_id, target.controller_id, zones[0])
+        self._submit(
+            {"op": "set_start_profile", "zones": zones, "enable": enable},
+            f"Sending profile {action.lower()} to zones {zones}…",
+            trigger_key=f"profile:{','.join(map(str, zones))}:{wire_value}",
+            target=target,
+            profile_zones=tuple(zones),
+        )
+
+    def _start_autotune(self) -> None:
+        zone = self._selected_zone_id
+        choice = QMessageBox.question(
+            self,
+            "Confirm autotune start",
+            f"Start autotune for selected zone {zone}?\n\n"
+            f"The controller will use that zone's configured autotune setpoint "
+            f"({self._autotune_setpoint_text()}); that setpoint is not the start trigger. "
+            "Autotune can change controller output while it runs.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            self.status_label.setText("Autotune start canceled; no command was sent.")
+            return
+        self._submit(
+            {"op": "start_autotune", "zones": [zone]},
+            f"Sending autotune start to zone {zone}…",
+            trigger_key=f"autotune:{zone}",
+        )
+
+    def _stop_autotune(self) -> None:
+        zone = self._selected_zone_id
+        choice = QMessageBox.question(
+            self,
+            "Confirm autotune stop",
+            f"Stop autotune for selected zone {zone}?\n\n"
+            "This writes the controller's autotune disable command. It may change output "
+            "behavior; no effect is assumed to be harmless.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            self.status_label.setText("Autotune stop canceled; no command was sent.")
+            return
+        self._submit(
+            {"op": "stop_autotune", "zone": zone},
+            f"Sending autotune stop to zone {zone}…",
+            trigger_key=f"autotune:{zone}",
+        )
+
+    def _autotune_setpoint_text(self) -> str:
+        snapshot = self._snapshots.get("telemetry")
+        data = dict(snapshot.data) if snapshot is not None and snapshot.data is not None else None
+        zone = get_zone(get_zones(data, "telemetry"), self._selected_zone_id)
+        value = get_numeric(
+            zone,
+            "autotune_sp_c",
+            "autotune_sp",
+            "sp_autotune_c",
+            "sp_autotune",
+            "SP_autotune",
+        )
+        return f"{value:g} °C" if value is not None else "unknown"
+
+    def _acknowledge_unknown(self) -> None:
+        if not self._unresolved_triggers:
+            return
+        choice = QMessageBox.question(
+            self,
+            "Acknowledge unresolved trigger",
+            "Clear the on-screen uncertainty warning? This does not determine whether "
+            "the command executed, does not verify controller state, and does not retry it.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice == QMessageBox.StandardButton.Yes:
+            self._unresolved_triggers.clear()
+            self._refresh_uncertainty()
+            self.status_label.setText(
+                "Uncertainty warning acknowledged locally only; trigger outcome remains unknown."
+            )
+            self._refresh_action_states()
+
     def _target(self) -> ZoneKey | None:
         if self._identity is None:
             return None
@@ -636,6 +924,9 @@ class RampSoakPage(QWidget):
         *,
         coalesce_key: str | None = None,
         allow_read_only: bool = False,
+        trigger_key: str | None = None,
+        target: ZoneKey | None = None,
+        profile_zones: tuple[int, ...] = (),
     ) -> None:
         operation = message.get("op")
         if not isinstance(operation, str):
@@ -649,12 +940,14 @@ class RampSoakPage(QWidget):
         if not allow_read_only and not self._writes_allowed:
             self.status_label.setText("Service is not writable; no profile change was sent.")
             return
-        target = self._target()
+        target = target or self._target()
         if not allow_read_only and target is None:
             self.status_label.setText("Controller identity is unknown; no profile change was sent.")
             return
 
         self._pending_operations.add(operation)
+        self._pending_trigger_key = trigger_key
+        self._pending_profile_zones = profile_zones
         self._awaiting_category = (
             "telemetry" if operation == "set_control_mode" else "rampsoak"
         )
@@ -675,11 +968,15 @@ class RampSoakPage(QWidget):
             )
         except (OSError, RuntimeError, ValueError) as exc:
             self._pending_operations.discard(operation)
+            self._pending_trigger_key = None
+            self._pending_profile_zones = ()
             self._awaiting_readback = False
             self.status_label.setText(f"Unable to queue request: {exc}")
         else:
             if result not in {"submitted", "coalesced", "mocked"}:
                 self._pending_operations.discard(operation)
+                self._pending_trigger_key = None
+                self._pending_profile_zones = ()
                 self._awaiting_readback = False
                 self.status_label.setText(f"Service request {result}; no profile command was sent.")
         self._refresh_action_states()
@@ -701,3 +998,43 @@ class RampSoakPage(QWidget):
         self.apply_mode_button.setEnabled(
             not pending and self._writes_allowed and self._command_submitter is not None
         )
+        trigger_available = (
+            not pending
+            and self._writes_allowed
+            and self._command_submitter is not None
+            and not self._unresolved_triggers
+        )
+        profile_enabled = getattr(self, "_profile_enable_state", "unknown")
+        profile_fresh = getattr(self, "_profile_readback_fresh", False)
+        profile_known = profile_fresh and profile_enabled in {"ENABLE", "DISABLE"}
+        self.start_selected_button.setEnabled(
+            trigger_available and not (profile_known and profile_enabled == "ENABLE")
+        )
+        self.stop_selected_button.setEnabled(
+            trigger_available and not (profile_known and profile_enabled == "DISABLE")
+        )
+        self.start_monitored_button.setEnabled(
+            trigger_available and self._has_monitored_zones()
+        )
+        self.stop_monitored_button.setEnabled(
+            trigger_available and self._has_monitored_zones()
+        )
+        autotune_enabled = getattr(self, "_autotune_enable_state", "unknown")
+        autotune_fresh = getattr(self, "_autotune_readback_fresh", False)
+        autotune_known = autotune_fresh and autotune_enabled in {"ENABLE", "DISABLE"}
+        self.start_autotune_button.setEnabled(
+            trigger_available and not (autotune_known and autotune_enabled == "ENABLE")
+        )
+        self.stop_autotune_button.setEnabled(
+            trigger_available and not (autotune_known and autotune_enabled == "DISABLE")
+        )
+        self.acknowledge_unknown_button.setEnabled(
+            not pending and bool(self._unresolved_triggers)
+        )
+
+    def _has_monitored_zones(self) -> bool:
+        try:
+            self._monitored_zone_ids()
+        except ValueError:
+            return False
+        return True

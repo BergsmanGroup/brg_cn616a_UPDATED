@@ -28,6 +28,7 @@ READ_ONLY_OPERATIONS = frozenset(
     }
 )
 RUN_CONTROL_OPERATIONS = frozenset({"start_run", "stop_run", "set_run_schedule"})
+PROFILE_EXECUTION_OPERATIONS = frozenset({"set_start_profile"})
 SERVICE_CONFIGURATION_OPERATIONS = frozenset(
     {"set_service_config", "connect_serial", "disconnect_serial", "refresh_connection"}
 )
@@ -205,6 +206,29 @@ def messages_match_zone(
                 for zone in zones
             ):
                 return False
+    return True
+
+
+def messages_match_profile_zones(
+    messages: Sequence[Mapping[str, object]],
+    target: ZoneKey,
+) -> bool:
+    """Validate an explicit start/stop zone list against a verified controller target."""
+    if not 1 <= target.zone_id <= 6 or not messages:
+        return False
+    for message in messages:
+        if message.get("op") not in PROFILE_EXECUTION_OPERATIONS or "zone" in message:
+            return False
+        zones = message.get("zones")
+        if not isinstance(zones, (list, tuple)) or not zones:
+            return False
+        if any(
+            isinstance(zone, bool) or not isinstance(zone, int) or not 1 <= zone <= 6
+            for zone in zones
+        ):
+            return False
+        if len(set(zones)) != len(zones) or target.zone_id not in zones:
+            return False
     return True
 
 

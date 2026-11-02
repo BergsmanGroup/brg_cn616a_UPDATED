@@ -505,6 +505,51 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertTrue(all(isinstance(request["id"], str) for request in requests))
         self.assertTrue(all("unit" not in request for request in requests))
 
+    def test_profile_execution_requires_verified_target_and_explicit_valid_zone_list(self) -> None:
+        self._write_snapshots()
+        endpoint = self._endpoint(
+            {
+                "get_status": self._status_response,
+                "set_start_profile": lambda request: {
+                    "id": request["id"],
+                    "ok": True,
+                },
+            }
+        )
+        adapter = self._adapter(endpoint)
+        self._wait_for(lambda: not adapter.status.read_only)
+        target = ZoneKey("COM_QT_TEST", 3, 1)
+
+        self.assertEqual(
+            adapter.submit(
+                [{"op": "set_start_profile", "zones": [1, 2, 3], "enable": True}],
+                target=target,
+            ),
+            "submitted",
+        )
+        self._wait_for(
+            lambda: any(
+                request.get("op") == "set_start_profile"
+                for request in endpoint.request_snapshot()
+            )
+        )
+        request = endpoint.request_snapshot()[-1]
+        self.assertEqual(request["op"], "set_start_profile")
+        self.assertEqual(request["zones"], [1, 2, 3])
+        self.assertTrue(request["enable"])
+
+        attempts = (
+            ({"op": "set_start_profile", "zone": 1, "enable": True}, target),
+            ({"op": "set_start_profile", "zones": [1, 1], "enable": True}, target),
+            ({"op": "set_start_profile", "zones": [1, 7], "enable": True}, target),
+            ({"op": "set_start_profile", "zones": [2, 3], "enable": True}, target),
+            ({"op": "set_start_profile", "zones": [1, 2], "enable": True}, ZoneKey("OTHER", 3, 1)),
+        )
+        before = len(endpoint.request_snapshot())
+        for message, candidate in attempts:
+            self.assertEqual(adapter.submit([message], target=candidate), "rejected")
+        self.assertEqual(len(endpoint.request_snapshot()), before)
+
     def test_overview_apply_sends_exact_zone_update_payload_order(self) -> None:
         self._write_snapshots()
         telemetry_path = self.logs_dir / "cn616a_telemetry_state.json"

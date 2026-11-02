@@ -6,10 +6,20 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .adapter import QtAdapter, SubmissionStatus, ZoneKey
 from .configuration import ConfigurationPage
+from .logs import LogsPage
 from .overview import OverviewPage
 from .ramp_soak import RampSoakPage
 
@@ -57,14 +67,6 @@ QStatusBar { background: #f6faff; color: #526b82; font-size: 8pt; }
 """
 
 
-TAB_CONTENT = (
-    (
-        "Logs",
-        "Log browsing is not migrated. Replay files remain in the temporary session.",
-    ),
-)
-
-
 class QtMainWindow(QMainWindow):
     def __init__(self, adapter: QtAdapter | None = None) -> None:
         super().__init__()
@@ -107,6 +109,9 @@ class QtMainWindow(QMainWindow):
         self.mode_banner.setWordWrap(True)
         self.mode_banner.setMaximumWidth(700)
         top_layout.addWidget(self.mode_banner, 1)
+        self.view_logs_button = QPushButton("View Logs")
+        self.view_logs_button.setObjectName("viewLogs")
+        top_layout.addWidget(self.view_logs_button)
         layout.addWidget(top_bar)
 
         self.tabs = QTabWidget()
@@ -145,15 +150,15 @@ class QtMainWindow(QMainWindow):
             command_submitter=self._submit_rampsoak_commands if adapter is not None else None,
         )
         self.tabs.addTab(self.ramp_soak, "Ramp/Soak")
-        for title, description in TAB_CONTENT:
-            page = QWidget()
-            page_layout = QVBoxLayout(page)
-            page_layout.setContentsMargins(18, 18, 18, 18)
-            label = QLabel(description)
-            label.setWordWrap(True)
-            page_layout.addWidget(label)
-            page_layout.addStretch(1)
-            self.tabs.addTab(page, title)
+        self.logs = LogsPage(Path(logs_dir))
+        self.overview.run_recording_card.status_summary_changed.connect(
+            self.logs.set_recording_summary
+        )
+        self.logs.set_recording_summary(
+            self.overview.run_recording_card.status_summary()
+        )
+        self.tabs.addTab(self.logs, "Logs")
+        self.view_logs_button.clicked.connect(self._show_logs)
         layout.addWidget(self.tabs)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(root)
@@ -164,6 +169,7 @@ class QtMainWindow(QMainWindow):
         else:
             self.configuration.set_adapter_status(None)
             self.ramp_soak.set_adapter_status(None, writes_allowed=False)
+            self.logs.set_adapter_status(None)
         if adapter is not None:
             poll_history = getattr(adapter, "poll_history", None)
             if callable(poll_history):
@@ -291,6 +297,10 @@ class QtMainWindow(QMainWindow):
         if self.tabs.widget(index) is self.ramp_soak:
             self.ramp_soak.on_tab_selected()
 
+    def _show_logs(self) -> None:
+        self.logs.show_service_activity()
+        self.tabs.setCurrentWidget(self.logs)
+
     def _refresh_adapter_status(self) -> None:
         if self.adapter is None:
             return
@@ -316,6 +326,7 @@ class QtMainWindow(QMainWindow):
         suffix = " READ-ONLY" if status.read_only else ""
         self.mode_banner.setText(f"{status.message} — {status.provenance}{suffix}")
         self.statusBar().showMessage(status.message)
+        self.logs.set_adapter_status(status)
         self.overview.set_status(status)
         service_writes_allowed = (
             status.mode == "offline-replay"
@@ -354,6 +365,7 @@ class QtMainWindow(QMainWindow):
         self.overview.set_command_outcome(outcome)
         self.configuration.set_command_outcome(outcome)
         self.ramp_soak.set_command_outcome(outcome)
+        self.logs.add_command_outcome(outcome)
         self.statusBar().showMessage(f"{outcome.operation}: {outcome.result} — {outcome.message}")
 
     def closeEvent(self, event) -> None:
@@ -362,6 +374,7 @@ class QtMainWindow(QMainWindow):
         self.overview.shutdown()
         self.configuration.shutdown()
         self.ramp_soak.shutdown()
+        self.logs.shutdown()
         if self.adapter is not None:
             self.adapter.shutdown()
         event.accept()

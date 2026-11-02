@@ -144,7 +144,11 @@ class QtRampSoakTests(unittest.TestCase):
         }
         service_config = {
             "ts": "2026-11-01T12:00:00+00:00",
-            "config": {"zone_names": {"1": "Feed", "2": "Return"}},
+            "config": {
+                "zone_names": {"1": "Feed", "2": "Return"},
+                "zones_mode": "list",
+                "zones_list": [1, 2],
+            },
         }
         self.page.set_snapshot(self._snapshot("rampsoak", ramp))
         self.page.set_snapshot(self._snapshot("telemetry", telemetry))
@@ -358,6 +362,107 @@ class QtRampSoakTests(unittest.TestCase):
         self.assertIn("confirmed_failure", self.page.status_label.text())
         self.assertTrue(self.page.profile_model.dirty)
 
+    def test_profile_execution_cancel_and_all_monitored_confirmation_targets(self) -> None:
+        self._load_zone_data()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+            self.page._start_stop_profile(True, all_monitored=True)
+        self.assertEqual(self.requests, [])
+        self.assertIn("canceled", self.page.status_label.text())
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.page._start_stop_profile(True, all_monitored=True)
+        self.assertEqual(
+            self.requests[-1][0][0],
+            {"op": "set_start_profile", "zones": [1, 2], "enable": True},
+        )
+        self.assertEqual(self.requests[-1][1]["target"], ZoneKey("ramp-test", 2, 1))
+        self.assertTrue(self.page._pending_operations)
+        self.assertFalse(self.page.start_selected_button.isEnabled())
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.page._start_stop_profile(True, all_monitored=True)
+        self.assertEqual(len(self.requests), 1)
+        self.page.set_command_outcome(
+            CommandOutcome(
+                operation="set_start_profile",
+                result="confirmed_failure",
+                message="zone write failure",
+            )
+        )
+        self.assertIn("some earlier zone writes may have applied", self.page.status_label.text())
+
+    def test_autotune_is_zone_scoped_confirmed_and_unknown_is_not_cleared_by_snapshot(self) -> None:
+        self._load_zone_data()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+            self.page._start_autotune()
+        self.assertEqual(self.requests, [])
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.page._start_autotune()
+        self.assertEqual(
+            self.requests[-1][0][0],
+            {"op": "start_autotune", "zones": [1]},
+        )
+        self.assertEqual(self.requests[-1][1]["target"], ZoneKey("ramp-test", 2, 1))
+        self.page.set_command_outcome(
+            CommandOutcome(
+                operation="start_autotune",
+                result="unknown",
+                message="connection timed out",
+            )
+        )
+        self.assertIn("may have executed", self.page.uncertainty_label.text())
+        self.assertFalse(self.page.start_autotune_button.isEnabled())
+        self.page.set_snapshot(
+            self._snapshot(
+                "telemetry",
+                {
+                    "ts": "2026-11-01T12:02:00+00:00",
+                    "unit": 2,
+                    "port": "ramp-test",
+                    "telemetry": {"zones": {"1": {"autotune_enable": "DISABLE"}}},
+                },
+            )
+        )
+        self.assertIn("may have executed", self.page.uncertainty_label.text())
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.page._acknowledge_unknown()
+        self.assertEqual(self.page.uncertainty_label.text(), "")
+        self.assertIn("remains unknown", self.page.status_label.text())
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.page._stop_autotune()
+        self.assertEqual(
+            self.requests[-1][0][0],
+            {"op": "stop_autotune", "zone": 1},
+        )
+
+    def test_tab_entry_and_reopen_issue_reads_but_never_repeat_execution_triggers(self) -> None:
+        self.page.on_tab_selected()
+        self.assertEqual(
+            [message["op"] for batch, _kwargs in self.requests for message in batch],
+            ["read_rampsoak"],
+        )
+        replacement = RampSoakPage(command_submitter=self._capture_request)
+        self.addCleanup(replacement.shutdown)
+        replacement.set_adapter_status(
+            AdapterStatus(
+                mode="service",
+                connected=True,
+                read_only=False,
+                provenance="test service",
+                message="connected",
+                target=IDENTITY,
+            ),
+            writes_allowed=True,
+        )
+        replacement.on_tab_selected()
+        operations = [
+            message["op"]
+            for batch, _kwargs in self.requests
+            for message in batch
+        ]
+        self.assertEqual(operations, ["read_rampsoak", "read_rampsoak"])
+
     def test_profile_payload_passes_service_handler_with_exact_segment_indices(self) -> None:
         with patch("cn616a_service.CN616A", new=FakeProfileController):
             service = CN616AService(
@@ -428,6 +533,21 @@ class QtRampSoakTests(unittest.TestCase):
             self.assertEqual(segments["1"]["sp_c"], 0.0)
             self.assertEqual(segments["1"]["slope_c_per_min"], 4.5)
             self.assertTrue(any("SIMULATED ONLY" in outcome.message for outcome in session.outcomes()))
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                window.ramp_soak._start_stop_profile(True, all_monitored=False)
+            self.assertEqual(session.snapshots()["rampsoak"].zone_values[1]["start_profile"], "ENABLE")
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                window.ramp_soak._start_autotune()
+            self.assertTrue(any(
+                outcome.operation == "start_autotune"
+                and outcome.result == "confirmed_success"
+                and "SIMULATED ONLY" in outcome.message
+                for outcome in session.outcomes()
+            ))
+            self.assertEqual(
+                session.snapshots()["telemetry"].zone_values[1]["autotune_enable"],
+                "ENABLE",
+            )
         finally:
             window.close()
 
