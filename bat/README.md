@@ -108,6 +108,23 @@ $env:CN616A_SERVICE_TCP_PORT = "8765"
 - `service_start.bat` and `gui_start.bat` now pause on startup errors so double-click launches do not instantly disappear.
 - `gui_start.bat` starts the service as a separate process; closing the GUI does not stop the service.
 
+## 4b) Optional Qt GUI foundation
+
+The Qt launcher never starts the service and does not replace the Tk launcher.
+Install the optional dependencies once, then start the isolated replay:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-qt.txt
+.\bat\gui_qt_start.bat --offline-replay
+```
+
+The window shows exactly four tabs and labels repository-derived data as
+**OFFLINE REPLAY / NO HARDWARE**. The baseline and mock analysis are synthetic;
+controls are not migrated. `.\bat\gui_qt_start.bat --help` displays help without
+requiring a service or hardware. Omitting `--offline-replay` opens a disconnected,
+read-only shell that does not probe an endpoint. Keep using `gui_start.bat` for
+the operational Tk application.
+
 ## 5) Isolated responsiveness test
 
 On a test machine, without a controller or service:

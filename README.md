@@ -106,6 +106,25 @@ The CLI is a thin TCP client. It creates one JSON command, sends it to the servi
 
 The Tkinter GUI reads state files directly for display and uses the same TCP command interface for control and service configuration.
 
+### Optional Qt foundation shell
+
+The Qt GUI is an optional, separate launch path; it does not replace the Tk GUI
+or start the service. Install its dependencies and launch the repository-only
+offline replay from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-qt.txt
+.\bat\gui_qt_start.bat --offline-replay
+```
+
+The initial Qt foundation provides Overview, Configuration, Ramp/Soak, and Logs
+tabs with a prominent **OFFLINE REPLAY / NO HARDWARE** label. Its generated
+service-shaped files live in a temporary directory and use synthetic baseline
+data; analysis is mock-derived and outcomes are mock-only. No Qt controls have
+been migrated yet. Without `--offline-replay`, the shell is disconnected and
+read-only and does not probe a service endpoint. Use `.\bat\gui_start.bat` for
+the existing Tk application.
+
 The tabs are:
 
 - **Telemetry**: live zone values plus setpoint, control method, and autotune commands.
