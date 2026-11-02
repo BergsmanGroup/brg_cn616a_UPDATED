@@ -118,7 +118,9 @@ offline replay from the repository root:
 ```
 
 The Qt shell provides Overview, Configuration, Ramp/Soak, and Logs tabs. The
-offline replay shows a prominent **OFFLINE REPLAY / NO HARDWARE** label. Its
+un-maximized main window opens at 1500 x 1400 px; floating chart windows remain
+1000 x 560 px. The offline replay shows a prominent **OFFLINE REPLAY / NO
+HARDWARE** label. Its
 generated service-shaped files live in a temporary directory and use synthetic
 baseline data; analysis is mock-derived and outcomes are mock-only. The Overview
 presents a sortable six-zone table, focused-zone readbacks and charts,
@@ -126,8 +128,18 @@ source timestamps, age, and health. The replay is static, so its values become
 visibly stale after five seconds rather than appearing live. Zone update controls
 are enabled only for the selected, verified target; in replay they exercise
 simulated success, rejection, partial, and unknown outcomes without sending a
-service or hardware request. Selecting a zone or tab does not apply edits.
-Configuration, Ramp/Soak, and Logs are still incomplete. Without an explicit
+service or hardware request. The Overview recording card labels recording as
+data collection, not controller heating or profile execution. In replay,
+start/stop and scheduled-stop requests create only a simulated recording under
+the session's temporary directory; the path entered in the form is not written.
+The replay can also show a simulated recovered interruption.
+Selecting a zone or tab does not apply edits.
+Configuration now includes controller/system readbacks, service settings,
+retention estimates, and explicit Apply/connect/disconnect/refresh actions.
+Stored TCP endpoint fields do not switch the GUI's already selected endpoint.
+The Ramp/Soak tab supports reading and editing the 20-row profile, active
+segment count, and control mode through the adapter; profile start/stop remains
+unavailable. The Logs tab is still incomplete. Without an explicit
 mode, the shell is disconnected and read-only and does not probe a service
 endpoint. Offline replay never falls back to a normal service endpoint.
 
@@ -146,19 +158,26 @@ service (for example, one that owns COM4), add `--read-only`:
 .\bat\gui_qt_start.bat --service --read-only --host 127.0.0.1 --port 8765 --logs-dir .\logs
 ```
 
-This mode reads live service snapshots but disables the zone editors and rejects
-mutating requests in the adapter itself. It does not start a service or open a
-serial port. The status banner identifies **READ-ONLY MODE**. Without
+This mode reads live service snapshots and recording status but disables the
+zone editors and rejects all mutating requests (including recording and schedule
+commands) in the adapter itself. It does not start a service or open a serial
+port. The status banner identifies **READ-ONLY MODE**. Without
 `--read-only`, explicit service mode is writable when the service reports a
 connected controller and fresh, matching identity. In that mode the Overview's
 Apply action sends the ordered `set_sp_abs`, `set_control_method`, and
 `set_autotune_setpoint` requests through that existing service to the selected
 zone. Review the displayed controller identity and per-operation result before
 proceeding; a service acknowledgment is not controller readback. Live writes
-and controller behavior require user-only hardware validation. Use
+and controller behavior require user-only hardware validation. Recording
+controls use `start_run`, `stop_run`, `get_run_status`, and `set_run_schedule`;
+the service remains authoritative if the GUI is hidden or closed. Schedule
+entry is interpreted as Pacific time and converted to an offset-bearing ISO
+timestamp. Recording only mirrors service logs; it does not start or stop
+heating or profile execution. Use
 `.\bat\gui_start.bat` for the existing operational Tk application. The
 [Step 05 report](docs/reports/qt-gui-step-05.md) has the offline control
-walkthrough and test evidence.
+walkthrough and test evidence. The [Step 06 report](docs/reports/qt-gui-step-06.md)
+has the recording and schedule walkthrough and contract-test evidence.
 
 The feature list below describes the existing Tk GUI; Qt migration is in
 progress.
@@ -507,7 +526,12 @@ Shows per-zone live values from `cn616a_telemetry_state.json`. The command panel
 
 ### Configuration tab
 
-Reads controller configuration and service settings. Service settings are patched through `set_service_config`, then persisted by the service. Viewer settings include chart history duration, line width, colors, and visibility of absolute setpoint, autotune setpoint, and MAE lines.
+Reads system/zone configuration and available PID readbacks from service
+snapshots. Service settings are patched through `set_service_config`, then
+persisted by the service. Viewer settings include chart history duration, line
+width, colors, and visibility of absolute setpoint, autotune setpoint, and MAE
+lines. Connection actions use the currently selected adapter endpoint; saved
+host/port values do not switch this GUI or prove listener/serial reconfiguration.
 
 ### Ramp/Soak tab
 

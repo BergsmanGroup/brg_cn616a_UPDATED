@@ -25,6 +25,8 @@ from .adapter import (
     CommandOutcome,
     ControllerIdentity,
     READ_ONLY_OPERATIONS,
+    RUN_CONTROL_OPERATIONS,
+    SERVICE_CONFIGURATION_OPERATIONS,
     SnapshotCategory,
     SubmissionStatus,
     ZoneKey,
@@ -206,14 +208,37 @@ class QtServiceAdapter(QObject):
             copied.append(message)
 
         mutation = any(str(message["op"]) not in READ_ONLY_OPERATIONS for message in copied)
+        run_control = bool(copied) and all(
+            str(message["op"]) in RUN_CONTROL_OPERATIONS for message in copied
+        )
+        service_configuration = bool(copied) and all(
+            str(message["op"]) in SERVICE_CONFIGURATION_OPERATIONS for message in copied
+        )
+        if run_control and target is not None:
+            return self._reject(
+                messages,
+                target,
+                "Recording and schedule commands are service-level operations, not zone commands.",
+            )
+        if service_configuration and target is not None:
+            return self._reject(
+                messages,
+                target,
+                "Configuration and connection commands are service-level operations, not zone commands.",
+            )
         if target is not None and not self._target_matches(target):
             return self._reject(messages, target, "Command target is unknown or belongs to another controller.")
         if mutation:
-            if target is None:
-                return self._reject(messages, target, "Controller identity is unknown; writes are disabled.")
-            if self._status.read_only:
+            if service_configuration:
+                if self.read_only_mode:
+                    return self._reject(messages, target, "Service is configured read-only; no request was sent.")
+                if not self._service_reachable:
+                    return self._reject(messages, target, "Service endpoint is not reachable; no request was sent.")
+            elif self._status.read_only:
                 return self._reject(messages, target, "Service/controller is not ready for writes.")
-            if not self._messages_match_target(copied, target):
+            if not run_control and not service_configuration and target is None:
+                return self._reject(messages, target, "Controller identity is unknown; writes are disabled.")
+            if not run_control and not service_configuration and not self._messages_match_target(copied, target):
                 return self._reject(messages, target, "Command payload does not match the selected zone target.")
 
         self._next_submission += 1
@@ -327,7 +352,10 @@ class QtServiceAdapter(QObject):
             if state not in {"confirmed_success", "confirmed_failure", "not_sent", "unknown"}:
                 state = "unknown"
             if state == "confirmed_success" and str(message.get("op")) not in READ_ONLY_OPERATIONS:
-                detail = "Service acknowledged; controller readback has not been verified."
+                if str(message.get("op")) in RUN_CONTROL_OPERATIONS:
+                    detail = "Service acknowledged; authoritative recording status has not been refreshed."
+                else:
+                    detail = "Service acknowledged; controller readback has not been verified."
             elif state == "confirmed_success":
                 detail = "Service response received."
             else:

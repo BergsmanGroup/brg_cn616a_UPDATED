@@ -105,7 +105,18 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def _endpoint(self, handlers: dict[str, Any] | None = None) -> FakeJsonLinesEndpoint:
-        endpoint = FakeJsonLinesEndpoint(handlers)
+        endpoint_handlers = dict(handlers or {})
+        endpoint_handlers.setdefault(
+            "get_run_status",
+            lambda request: {
+                "id": request["id"],
+                "ok": True,
+                "run_active": False,
+                "run_schedule_enabled": False,
+                "run_recovered": False,
+            },
+        )
+        endpoint = FakeJsonLinesEndpoint(endpoint_handlers)
         self.endpoints.append(endpoint)
         return endpoint
 
@@ -212,6 +223,70 @@ class QtServiceAdapterTests(unittest.TestCase):
     @staticmethod
     def _status_response(request: dict[str, Any]) -> dict[str, object]:
         return {"id": request["id"], "ok": True, "connected": True}
+
+    def test_failed_connection_transition_never_switches_to_stored_endpoint(self) -> None:
+        endpoint = self._endpoint(
+            {
+                "get_status": lambda request: {
+                    "id": request["id"],
+                    "ok": True,
+                    "connected": False,
+                },
+                "set_service_config": lambda request: {
+                    "id": request["id"],
+                    "ok": True,
+                    "service_config": request["patch"],
+                },
+                "connect_serial": lambda request: {
+                    "id": request["id"],
+                    "ok": False,
+                    "error": "simulated controller connection failure",
+                },
+            }
+        )
+        adapter = self._adapter(endpoint)
+        self._wait_for(lambda: adapter.status.connected and adapter.status.controller_connected is False)
+        original_endpoint = adapter.endpoint
+        self.assertTrue(adapter.status.read_only)
+
+        result = adapter.submit(
+            (
+                {
+                    "op": "set_service_config",
+                    "patch": {"last_tcp_host": "192.0.2.77", "last_tcp_port": 5544},
+                },
+                {"op": "connect_serial"},
+            )
+        )
+        self.assertEqual(result, "submitted")
+        self._wait_for(lambda: len(adapter.outcomes()) == 2)
+        self.assertEqual(
+            [outcome.result for outcome in adapter.outcomes()],
+            ["confirmed_success", "confirmed_failure"],
+        )
+        requests = endpoint.request_snapshot()
+        self.assertEqual(
+            [request["op"] for request in requests],
+            ["get_status", "set_service_config", "connect_serial"],
+        )
+        self.assertEqual(adapter.endpoint, original_endpoint)
+        self.assertEqual(adapter.host, endpoint.host)
+        self.assertEqual(adapter.port, endpoint.port)
+
+    def test_explicit_read_only_rejects_service_configuration_without_sending(self) -> None:
+        endpoint = self._endpoint({"get_status": self._status_response})
+        adapter = self._adapter(endpoint, read_only=True)
+        self._wait_for(lambda: adapter.status.connected)
+
+        result = adapter.submit(
+            ({"op": "set_service_config", "patch": {"gui_refresh_hz": 1.0}},)
+        )
+        self.assertEqual(result, "rejected")
+        self.assertEqual(
+            [request["op"] for request in endpoint.request_snapshot()],
+            ["get_status"],
+        )
+        self.assertEqual(adapter.outcomes()[-1].result, "not_sent")
 
     def test_five_categories_aliases_zero_missing_time_staleness_and_target_keys(self) -> None:
         self._write_snapshots()
@@ -457,11 +532,13 @@ class QtServiceAdapterTests(unittest.TestCase):
         page.autotune_sp_entry.setText("0")
         page._control_form_edited()
         page.apply_controls_button.click()
-        self._wait_for(lambda: len(adapter.outcomes()) == 3)
+        self._wait_for(
+            lambda: len([item for item in adapter.outcomes() if item.operation != "get_run_status"]) == 3
+        )
 
         requests = endpoint.request_snapshot()
         self.assertEqual(
-            [request["op"] for request in requests],
+            [request["op"] for request in requests if request["op"] != "get_run_status"],
             [
                 "get_status",
                 "set_sp_abs",
@@ -473,6 +550,7 @@ class QtServiceAdapterTests(unittest.TestCase):
             [
                 {key: value for key, value in request.items() if key not in {"id"}}
                 for request in requests[1:]
+                if request["op"] != "get_run_status"
             ],
             [
                 {"op": "set_sp_abs", "zone": 1, "value_c": -2.5},
@@ -482,7 +560,11 @@ class QtServiceAdapterTests(unittest.TestCase):
         )
         self.assertTrue(all("unit" not in request for request in requests))
         self.assertEqual(
-            [outcome.result for outcome in adapter.outcomes()],
+            [
+                outcome.result
+                for outcome in adapter.outcomes()
+                if outcome.operation != "get_run_status"
+            ],
             ["confirmed_success"] * 3,
         )
         self.assertIn("awaiting fresh controller readback", page.control_status_label.text())
@@ -518,6 +600,14 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertFalse(page.method_combo.isEnabled())
         self.assertFalse(page.autotune_sp_entry.isEnabled())
         self.assertFalse(page.apply_controls_button.isEnabled())
+        self._wait_for(
+            lambda: any(
+                item.operation == "get_run_status"
+                for item in adapter.outcomes()
+            )
+        )
+        self.assertFalse(page.run_recording_card.start_button.isEnabled())
+        self.assertFalse(page.run_recording_card.enable_schedule_button.isEnabled())
 
         self.assertEqual(
             adapter.submit(
@@ -529,8 +619,19 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.outcomes()[-1].result, "not_sent")
         self.assertIn("not ready for writes", adapter.outcomes()[-1].message)
         self.assertEqual(
+            adapter.submit([{"op": "start_run", "run_dir": str(self.logs_dir / "run")}]),
+            "rejected",
+        )
+        self.assertEqual(adapter.outcomes()[-1].result, "not_sent")
+        self._wait_for(
+            lambda: any(
+                item.operation == "get_run_status"
+                for item in adapter.outcomes()
+            )
+        )
+        self.assertEqual(
             [request["op"] for request in endpoint.request_snapshot()],
-            ["get_status"],
+            ["get_status", "get_run_status"],
         )
 
     def test_overview_partial_failure_reports_unsent_operations_without_retry(self) -> None:
@@ -556,10 +657,16 @@ class QtServiceAdapterTests(unittest.TestCase):
         page.autotune_sp_entry.setText("2")
         page._control_form_edited()
         page.apply_controls_button.click()
-        self._wait_for(lambda: len(adapter.outcomes()) == 3)
+        self._wait_for(
+            lambda: len([item for item in adapter.outcomes() if item.operation != "get_run_status"]) == 3
+        )
 
         self.assertEqual(
-            [outcome.result for outcome in adapter.outcomes()],
+            [
+                outcome.result
+                for outcome in adapter.outcomes()
+                if outcome.operation != "get_run_status"
+            ],
             ["confirmed_success", "confirmed_failure", "not_sent"],
         )
         self.assertIn("rejected", page.control_status_label.text())
@@ -567,7 +674,11 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertIn("No automatic retry", page.control_status_label.text())
         self.assertIn("not atomic", page.control_status_label.text())
         self.assertEqual(
-            [request["op"] for request in endpoint.request_snapshot()],
+            [
+                request["op"]
+                for request in endpoint.request_snapshot()
+                if request["op"] != "get_run_status"
+            ],
             ["get_status", "set_sp_abs", "set_control_method"],
         )
 
@@ -910,6 +1021,227 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(len(errors), 1)
         self.assertIsInstance(errors[0], RuntimeError)
+
+    def test_recording_and_schedule_payloads_are_service_level_and_update_while_tab_hidden(self) -> None:
+        self._write_snapshots()
+        state: dict[str, object] = {
+            "run_active": False,
+            "run_dir": None,
+            "run_name": "",
+            "run_elapsed_s": None,
+            "run_schedule_enabled": False,
+            "run_schedule_stop_at": None,
+            "run_last_data_ts": None,
+            "run_recovered": False,
+            "run_interruption_s": None,
+        }
+
+        def get_run_status(request: dict[str, Any]) -> dict[str, object]:
+            return {"id": request["id"], "ok": True, **state}
+
+        def start_run(request: dict[str, Any]) -> dict[str, object]:
+            state.update(
+                run_active=True,
+                run_dir=request["run_dir"],
+                run_name=request.get("run_name") or "",
+                run_elapsed_s=0.0,
+                run_last_data_ts="2026-01-15T20:30:00+00:00",
+            )
+            return {"id": request["id"], "ok": True, **state}
+
+        def set_schedule(request: dict[str, Any]) -> dict[str, object]:
+            state["run_schedule_enabled"] = request["enabled"]
+            state["run_schedule_stop_at"] = request.get("stop_at_iso")
+            return {"id": request["id"], "ok": True, **state}
+
+        def stop_run(request: dict[str, Any]) -> dict[str, object]:
+            was_active = bool(state["run_active"])
+            state["run_active"] = False
+            return {"id": request["id"], "ok": True, "was_active": was_active, **state}
+
+        endpoint = self._endpoint(
+            {
+                "get_status": self._status_response,
+                "get_run_status": get_run_status,
+                "start_run": start_run,
+                "set_run_schedule": set_schedule,
+                "stop_run": stop_run,
+            }
+        )
+        adapter = self._adapter(endpoint)
+        self._wait_for(lambda: not adapter.status.read_only)
+        window = QtMainWindow(adapter)
+        self.addCleanup(window.close)
+        card = window.overview.run_recording_card
+        self._wait_for(lambda: card.start_button.isEnabled())
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "recording-a"
+            card.directory_entry.setText(str(run_dir))
+            card.name_entry.setText("Batch A")
+            window.tabs.setCurrentIndex(3)
+            card.start_button.click()
+            self._wait_for(lambda: "Recording ACTIVE" in card.status_label.text())
+            start_requests = [
+                request for request in endpoint.request_snapshot() if request["op"] == "start_run"
+            ]
+            self.assertEqual(len(start_requests), 1)
+            self.assertTrue(
+                any(
+                    outcome.operation == "start_run"
+                    and "authoritative recording status has not been refreshed" in outcome.message
+                    for outcome in adapter.outcomes()
+                )
+            )
+            self.assertEqual(
+                {key: value for key, value in start_requests[0].items() if key != "id"},
+                {"op": "start_run", "run_dir": str(run_dir), "run_name": "Batch A"},
+            )
+            self.assertNotIn("unit", start_requests[0])
+
+            state["run_last_data_ts"] = "2026-01-15T20:31:00+00:00"
+            self._wait_for(lambda: "12:31:00 PM PST" in card.status_label.text())
+            self._wait_for(lambda: card.enable_schedule_button.isEnabled())
+            self.assertFalse(adapter.status.read_only)
+            card.schedule_entry.setText("2099-01-15 12:30")
+            card.enable_schedule_button.click()
+            self._wait_for(
+                lambda: any(
+                    request["op"] == "set_run_schedule"
+                    for request in endpoint.request_snapshot()
+                )
+            )
+            schedule_request = next(
+                request
+                for request in endpoint.request_snapshot()
+                if request["op"] == "set_run_schedule"
+            )
+            self.assertEqual(
+                {key: value for key, value in schedule_request.items() if key != "id"},
+                {
+                    "op": "set_run_schedule",
+                    "enabled": True,
+                    "stop_at_iso": "2099-01-15T12:30:00-08:00",
+                },
+            )
+            self._wait_for(
+                lambda: any(
+                    outcome.operation == "set_run_schedule"
+                    and outcome.result == "confirmed_success"
+                    for outcome in adapter.outcomes()
+                )
+            )
+            self._wait_for(lambda: card.stop_button.isEnabled())
+            card.stop_button.click()
+            self._wait_for(lambda: "Recording INACTIVE" in card.status_label.text())
+            self.assertEqual(
+                len([request for request in endpoint.request_snapshot() if request["op"] == "start_run"]),
+                1,
+            )
+
+    def test_reopening_gui_shows_existing_recording_without_start_or_stop(self) -> None:
+        self._write_snapshots()
+        state = {
+            "run_active": True,
+            "run_dir": str(self.logs_dir / "existing-run"),
+            "run_name": "Existing",
+            "run_elapsed_s": 12.0,
+            "run_schedule_enabled": False,
+            "run_schedule_stop_at": None,
+            "run_last_data_ts": "2026-01-15T20:30:00+00:00",
+            "run_recovered": False,
+            "run_interruption_s": None,
+        }
+        endpoint = self._endpoint(
+            {
+                "get_status": self._status_response,
+                "get_run_status": lambda request: {
+                    "id": request["id"],
+                    "ok": True,
+                    **state,
+                },
+            }
+        )
+        first_adapter = self._adapter(endpoint)
+        self._wait_for(lambda: not first_adapter.status.read_only)
+        first_window = QtMainWindow(first_adapter)
+        first_card = first_window.overview.run_recording_card
+        self._wait_for(lambda: "Recording ACTIVE" in first_card.status_label.text())
+        self.assertFalse(first_card.start_button.isEnabled())
+        first_window.close()
+
+        second_adapter = self._adapter(endpoint)
+        self._wait_for(lambda: not second_adapter.status.read_only)
+        second_window = QtMainWindow(second_adapter)
+        self.addCleanup(second_window.close)
+        second_card = second_window.overview.run_recording_card
+        self._wait_for(lambda: "Recording ACTIVE" in second_card.status_label.text())
+        self.assertFalse(second_card.start_button.isEnabled())
+        self.assertEqual(
+            [
+                request["op"]
+                for request in endpoint.request_snapshot()
+                if request["op"] in {"start_run", "stop_run"}
+            ],
+            [],
+        )
+
+    def test_run_status_requests_coalesce_while_delayed_and_unknown_start_is_not_retried(self) -> None:
+        self._write_snapshots()
+        request_seen = threading.Event()
+        release_response = threading.Event()
+        state = {"run_active": False}
+
+        def delayed_status(request: dict[str, Any]) -> dict[str, object]:
+            request_seen.set()
+            if not release_response.wait(timeout=2.0):
+                return {"id": request["id"], "ok": False, "error": "test timed out"}
+            return {"id": request["id"], "ok": True, **state}
+
+        start_seen = threading.Event()
+
+        def delayed_start(request: dict[str, Any]) -> dict[str, object]:
+            start_seen.set()
+            time.sleep(0.35)
+            return {"id": request["id"], "ok": True, **state}
+
+        endpoint = self._endpoint(
+            {
+                "get_status": self._status_response,
+                "get_run_status": delayed_status,
+                "start_run": delayed_start,
+            }
+        )
+        adapter = self._adapter(endpoint, timeout_s=0.15)
+        window = QtMainWindow(adapter)
+        self.addCleanup(window.close)
+        card = window.overview.run_recording_card
+        try:
+            self._wait_for(lambda: request_seen.is_set())
+            for _ in range(10):
+                card.poll_status()
+            status_requests = [
+                request
+                for request in endpoint.request_snapshot()
+                if request["op"] == "get_run_status"
+            ]
+            self.assertEqual(len(status_requests), 1)
+        finally:
+            release_response.set()
+        self._wait_for(lambda: card.start_button.isEnabled())
+        card.directory_entry.setText(str(self.logs_dir / "timeout-run"))
+        card.start_button.click()
+        self._wait_for(
+            lambda: any(
+                outcome.operation == "start_run" and outcome.result == "unknown"
+                for outcome in adapter.outcomes()
+            )
+        )
+        self.assertTrue(start_seen.is_set())
+        self.assertIn("No automatic retry", card.feedback_label.text())
+        self.assertEqual(
+            len([request for request in endpoint.request_snapshot() if request["op"] == "start_run"]),
+            1,
+        )
 
 
 if __name__ == "__main__":

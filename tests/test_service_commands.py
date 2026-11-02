@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -166,6 +167,11 @@ class ServiceCommandTests(unittest.TestCase):
         self.assertTrue(resp2["ok"])
         self.assertTrue(resp2["was_active"])
         self.assertFalse(resp2["run_active"])
+        stopped_info = json.loads(
+            (run_dir / "cn616a_run_info.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(stopped_info["event"], "stopped")
+        self.assertEqual(stopped_info["reason"], "manual")
 
         # Stopping again is idempotent.
         resp3 = self.svc.handle_command({"id": "d", "op": "stop_run"})
@@ -178,9 +184,47 @@ class ServiceCommandTests(unittest.TestCase):
 
     def test_run_mirrors_telemetry_log_into_run_dir(self):
         run_dir = Path(self.tmp.name) / "run2"
-        self.svc.handle_command({"id": "a", "op": "start_run", "run_dir": str(run_dir)})
+        self.svc.handle_command(
+            {"id": "a", "op": "start_run", "run_dir": str(run_dir), "run_name": "Contract test"}
+        )
         self.svc.poll_telemetry()
-        self.assertTrue((run_dir / "cn616a_telemetry_log.jsonl").exists())
+        telemetry_path = run_dir / "cn616a_telemetry_log.jsonl"
+        self.assertTrue(telemetry_path.exists())
+        telemetry_records = [
+            json.loads(line)
+            for line in telemetry_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(len(telemetry_records), 1)
+        self.assertEqual(
+            set(telemetry_records[0]),
+            {"ts", "unit", "port", "zones", "telemetry"},
+        )
+        self.assertEqual(telemetry_records[0]["port"], "COM_TEST")
+        self.assertEqual(telemetry_records[0]["unit"], 1)
+        self.assertTrue(telemetry_records[0]["telemetry"]["zones"])
+        run_info = json.loads((run_dir / "cn616a_run_info.json").read_text(encoding="utf-8"))
+        self.assertEqual(run_info["event"], "collecting")
+        self.assertEqual(run_info["run_name"], "Contract test")
+        self.assertIsNotNone(run_info["last_data_ts"])
+        active_state = json.loads(
+            (self.out_dir / "cn616a_active_run_state.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            set(active_state),
+            {"active", "run_dir", "run_name", "run_started_ts", "last_data_ts", "service_stopped_ts"},
+        )
+        self.assertTrue(active_state["active"])
+
+    def test_start_run_rejects_directory_path_that_is_a_file(self):
+        file_path = Path(self.tmp.name) / "not-a-directory"
+        file_path.write_text("test", encoding="utf-8")
+        response = self.svc.handle_command(
+            {"id": "a", "op": "start_run", "run_dir": str(file_path / "child")}
+        )
+
+        self.assertFalse(response["ok"])
+        self.assertIn("Cannot create run_dir", response["error"])
+        self.assertFalse(self.svc._run_active)
 
     def test_active_run_recovers_after_service_shutdown(self):
         run_dir = Path(self.tmp.name) / "recoverable_run"
@@ -206,6 +250,13 @@ class ServiceCommandTests(unittest.TestCase):
         self.assertIsNotNone(status["run_last_data_ts"])
         self.assertIsNotNone(status["run_interruption_s"])
         self.assertEqual(status["run_dir"], str(run_dir))
+        recovered_info = json.loads(
+            (run_dir / "cn616a_run_info.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovered_info["event"], "recovered")
+        self.assertTrue(recovered_info["recovered"])
+        self.assertIsNotNone(recovered_info["interruption_started_ts"])
+        self.assertIsNotNone(recovered_info["recovered_at_ts"])
         recovered.poll_telemetry()
         self.assertGreater((run_dir / "cn616a_telemetry_log.jsonl").stat().st_size, 0)
 

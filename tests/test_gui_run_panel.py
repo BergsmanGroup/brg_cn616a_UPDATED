@@ -12,6 +12,7 @@ if str(PY_DIR) not in sys.path:
     sys.path.insert(0, str(PY_DIR))
 
 from gui.run_panel import RunPanel  # noqa: E402
+from gui.run_schedule import parse_pacific_schedule  # noqa: E402
 
 
 class RunPanelTests(unittest.TestCase):
@@ -30,6 +31,16 @@ class RunPanelTests(unittest.TestCase):
         self.assertEqual(state.value, "C:\\manual\\run")
         self.assertIn("enter the run directory manually", state.message)
         self.assertFalse(state.ok)
+
+    def test_pacific_schedule_conversion_preserves_dst_offsets(self):
+        winter = parse_pacific_schedule("2026-01-15 12:30")
+        summer = parse_pacific_schedule("2026-07-15 12:30:45")
+
+        self.assertIsNotNone(winter)
+        self.assertIsNotNone(summer)
+        self.assertEqual(winter.isoformat(), "2026-01-15T12:30:00-08:00")
+        self.assertEqual(summer.isoformat(), "2026-07-15T12:30:45-07:00")
+        self.assertIsNone(parse_pacific_schedule("not a date"))
 
 
 if __name__ == "__main__":

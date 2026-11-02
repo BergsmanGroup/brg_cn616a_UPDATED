@@ -596,12 +596,15 @@ class ChartsPanel(QWidget):
         self._analysis_snapshot: AdapterSnapshot | None = None
         self._requested_config: AdapterSnapshot | None = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cn616a-qt-chart-transform")
-        self._transform_future: Future[dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]] | None = None
-        self._running_transform_key: tuple[int, int, int] | None = None
-        self._desired_transform_key: tuple[int, int, int] | None = None
-        self._prepared_transform_key: tuple[int, int, int] | None = None
-        self._prepared_series: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None
-        self._transform_error: str | None = None
+        self._transform_future: Future[
+            dict[int, dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]]
+        ] | None = None
+        self._running_transform_key: tuple[int, int, tuple[int, ...]] | None = None
+        self._prepared_history_key: tuple[int, int] | None = None
+        self._prepared_series_by_zone: dict[
+            int, dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]
+        ] = {}
+        self._transform_errors_by_zone: dict[int, str] = {}
         self._closing = False
         self._floating_windows: set[FloatingChartWindow] = set()
         self._floating_charts: dict[FloatingChartWindow, ChartWidget] = {}
@@ -650,23 +653,26 @@ class ChartsPanel(QWidget):
             hours = _valid_hours(preferences.get("history_hours"))
             if hours is not None and not math.isclose(hours, self._history_hours, rel_tol=1e-9):
                 self._request_history_window(hours)
-        prepared_series, transform_error = self._ensure_prepared_series()
+        selections = [self._selection]
+        selections.extend(chart._selection for chart in self._floating_charts.values())
+        prepared_series, transform_errors = self._ensure_prepared_series(selections)
         self.chart.set_chart_state(
             self._history,
             self._service_config,
             self._analysis_snapshot,
             self._selection,
-            prepared_series,
-            transform_error,
+            self._series_for_selection(self._selection, prepared_series),
+            self._error_for_selection(self._selection, transform_errors),
         )
         for floating_chart in tuple(self._floating_charts.values()):
+            selection = floating_chart._selection
             floating_chart.set_chart_state(
                 self._history,
                 self._service_config,
                 self._analysis_snapshot,
-                self._selection,
-                prepared_series,
-                transform_error,
+                selection,
+                self._series_for_selection(selection, prepared_series),
+                self._error_for_selection(selection, transform_errors),
             )
 
     def _configuration_for_history(self) -> AdapterSnapshot | None:
@@ -684,50 +690,99 @@ class ChartsPanel(QWidget):
 
     def _ensure_prepared_series(
         self,
+        selections: Sequence[tuple[int, ZoneKey] | None],
     ) -> tuple[
-        dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None,
-        str | None,
+        dict[int, dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]],
+        dict[int, str],
     ]:
         history = self._history
-        selection = self._selection
-        key: tuple[int, int, int] | None = None
-        if (
-            history is not None
-            and history.data is not None
-            and history.identity is not None
-            and selection is not None
-            and (selection[1].bus_id, selection[1].controller_id)
-            == (history.identity.key.bus_id, history.identity.key.controller_id)
-        ):
-            key = (history.generation, id(history), selection[0])
+        if history is None or history.data is None or history.identity is None:
+            self._prepared_history_key = None
+            self._prepared_series_by_zone.clear()
+            self._transform_errors_by_zone.clear()
+            return {}, {}
 
-        if key != self._desired_transform_key:
-            self._desired_transform_key = key
-            self._prepared_transform_key = None
-            self._prepared_series = None
-            self._transform_error = None
-        if key is None:
-            return None, None
-        if self._prepared_transform_key == key:
-            return self._prepared_series, self._transform_error
-        if self._transform_future is None:
-            if history is not None and selection is not None:
-                self._start_transform(key, history, selection[0])
-        return None, None
+        history_key = (history.generation, id(history))
+        if history_key != self._prepared_history_key:
+            self._prepared_history_key = history_key
+            self._prepared_series_by_zone.clear()
+            self._transform_errors_by_zone.clear()
+
+        zone_ids = tuple(
+            sorted(
+                {
+                    zone_id
+                    for selection in selections
+                    if selection is not None
+                    for zone_id, key in (selection,)
+                    if 1 <= zone_id <= 6
+                    and (key.bus_id, key.controller_id)
+                    == (history.identity.key.bus_id, history.identity.key.controller_id)
+                }
+            )
+        )
+        missing_zone_ids = tuple(
+            zone_id
+            for zone_id in zone_ids
+            if zone_id not in self._prepared_series_by_zone
+            and zone_id not in self._transform_errors_by_zone
+        )
+        if missing_zone_ids and self._transform_future is None:
+            self._start_transform(history_key, missing_zone_ids, history)
+
+        return (
+            {
+                zone_id: self._prepared_series_by_zone[zone_id]
+                for zone_id in zone_ids
+                if zone_id in self._prepared_series_by_zone
+            },
+            {
+                zone_id: self._transform_errors_by_zone[zone_id]
+                for zone_id in zone_ids
+                if zone_id in self._transform_errors_by_zone
+            },
+        )
+
+    @staticmethod
+    def _series_for_selection(
+        selection: tuple[int, ZoneKey] | None,
+        series_by_zone: Mapping[int, dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]],
+    ) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None:
+        return series_by_zone.get(selection[0]) if selection is not None else None
+
+    @staticmethod
+    def _error_for_selection(
+        selection: tuple[int, ZoneKey] | None,
+        errors_by_zone: Mapping[int, str],
+    ) -> str | None:
+        return errors_by_zone.get(selection[0]) if selection is not None else None
 
     def _start_transform(
         self,
-        key: tuple[int, int, int],
+        history_key: tuple[int, int],
+        zone_ids: tuple[int, ...],
         history: AdapterHistory,
-        zone_id: int,
     ) -> None:
-        if history.data is None:
+        history_data = history.data
+        if history_data is None:
             return
-        future = self._executor.submit(_prepare_chart_series, history.data, zone_id)
+        key = (*history_key, zone_ids)
+
+        def prepare() -> dict[int, dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]]:
+            return {
+                zone_id: _prepare_chart_series(history_data, zone_id)
+                for zone_id in zone_ids
+            }
+
+        future = self._executor.submit(prepare)
         self._transform_future = future
         self._running_transform_key = key
 
-        def publish(result_future: Future[dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]]) -> None:
+        def publish(
+            result_future: Future[
+                dict[int, dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]]
+            ],
+        ) -> None:
             try:
                 result = result_future.result()
             except Exception as exc:
@@ -745,14 +800,18 @@ class ChartsPanel(QWidget):
             return
         self._transform_future = None
         self._running_transform_key = None
-        if key == self._desired_transform_key:
-            self._prepared_transform_key = key
+        history_key = key[:2]
+        current_history = self._history
+        if (
+            current_history is not None
+            and (current_history.generation, id(current_history)) == history_key
+            and self._prepared_history_key == history_key
+        ):
             if isinstance(series, dict):
-                self._prepared_series = series
-                self._transform_error = error
-            else:
-                self._prepared_series = None
-                self._transform_error = error or "worker returned an invalid result"
+                self._prepared_series_by_zone.update(series)
+            if error is not None:
+                for zone_id in key[2]:
+                    self._transform_errors_by_zone[zone_id] = error
         self._queue_update()
 
     def _request_history_window(self, hours: float) -> None:
@@ -773,14 +832,14 @@ class ChartsPanel(QWidget):
         floating_chart = ChartWidget(allow_float=False)
         floating_chart.set_history_hours(self._history_hours)
         selection = self._selection
-        prepared_series, transform_error = self._ensure_prepared_series()
+        prepared_series, transform_errors = self._ensure_prepared_series((selection,))
         floating_chart.set_chart_state(
             self._history,
             self._service_config,
             self._analysis_snapshot,
             selection,
-            prepared_series,
-            transform_error,
+            self._series_for_selection(selection, prepared_series),
+            self._error_for_selection(selection, transform_errors),
         )
         floating_chart.history_window_requested.connect(self._request_history_window)
         window = FloatingChartWindow(floating_chart)

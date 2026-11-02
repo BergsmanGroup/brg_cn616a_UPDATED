@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
 from .adapter import QtAdapter, SubmissionStatus, ZoneKey
+from .configuration import ConfigurationPage
 from .overview import OverviewPage
+from .ramp_soak import RampSoakPage
 
 
 WINDOW_STYLE = """
@@ -56,18 +59,6 @@ QStatusBar { background: #f6faff; color: #526b82; font-size: 8pt; }
 
 TAB_CONTENT = (
     (
-        "Overview",
-        "Telemetry and controller status will be migrated in a later step.",
-    ),
-    (
-        "Configuration",
-        "Configuration editing is not migrated. No settings can be changed.",
-    ),
-    (
-        "Ramp/Soak",
-        "Profile editing and execution are not migrated. No commands can be sent.",
-    ),
-    (
         "Logs",
         "Log browsing is not migrated. Replay files remain in the temporary session.",
     ),
@@ -84,7 +75,7 @@ class QtMainWindow(QMainWindow):
         self.history_snapshot = None
         self.command_outcomes = []
         self.setWindowTitle("CN616A Control Desk — Preview")
-        self.resize(1100, 720)
+        self.resize(1500, 1400)
         self.setStyleSheet(WINDOW_STYLE)
 
         root = QWidget(self)
@@ -130,14 +121,31 @@ class QtMainWindow(QMainWindow):
         mock_scenario_setter = getattr(adapter, "set_mock_command_scenario", None)
         if not callable(mock_scenario_setter):
             mock_scenario_setter = None
+        run_command_submitter = self._submit_run_commands if adapter is not None else None
+        recovery_method = getattr(adapter, "simulate_run_recovery", None)
+        recovery_simulator = self._simulate_run_recovery if callable(recovery_method) else None
         self.overview = OverviewPage(
             stale_after_s=float(stale_after),
             history_requester=history_requester,
             command_submitter=command_submitter,
             mock_scenario_setter=mock_scenario_setter,
+            run_command_submitter=run_command_submitter,
+            recovery_simulator=recovery_simulator,
         )
         self.tabs.addTab(self.overview, "Overview")
-        for title, description in TAB_CONTENT[1:]:
+        default_logs_dir = Path(__file__).resolve().parents[2] / "logs"
+        logs_dir = getattr(adapter, "logs_dir", default_logs_dir) if adapter is not None else default_logs_dir
+        self.configuration = ConfigurationPage(
+            logs_dir=Path(logs_dir),
+            command_submitter=self._submit_configuration_commands if adapter is not None else None,
+        )
+        self.configuration.status_refresh_requested.connect(self._refresh_adapter_status)
+        self.tabs.addTab(self.configuration, "Configuration")
+        self.ramp_soak = RampSoakPage(
+            command_submitter=self._submit_rampsoak_commands if adapter is not None else None,
+        )
+        self.tabs.addTab(self.ramp_soak, "Ramp/Soak")
+        for title, description in TAB_CONTENT:
             page = QWidget()
             page_layout = QVBoxLayout(page)
             page_layout.setContentsMargins(18, 18, 18, 18)
@@ -147,9 +155,15 @@ class QtMainWindow(QMainWindow):
             page_layout.addStretch(1)
             self.tabs.addTab(page, title)
         layout.addWidget(self.tabs)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(root)
         self.statusBar().showMessage(self._status_text())
         self.overview.set_status(adapter.status if adapter is not None else None)
+        if adapter is not None:
+            self._on_adapter_status(adapter.status)
+        else:
+            self.configuration.set_adapter_status(None)
+            self.ramp_soak.set_adapter_status(None, writes_allowed=False)
         if adapter is not None:
             poll_history = getattr(adapter, "poll_history", None)
             if callable(poll_history):
@@ -215,6 +229,80 @@ class QtMainWindow(QMainWindow):
                 self._on_outcome_received(outcome)
         return result
 
+    def _submit_run_commands(
+        self,
+        messages: tuple[Mapping[str, object], ...],
+        coalesce_key: str | None,
+    ) -> SubmissionStatus:
+        if self.adapter is None:
+            raise RuntimeError("No adapter is configured; the recording request was not sent.")
+        is_offline = self.adapter.status.mode == "offline-replay"
+        previous_count = len(self.adapter.outcomes()) if is_offline else 0
+        result = self.adapter.submit(messages, coalesce_key=coalesce_key)
+        if is_offline:
+            for outcome in self.adapter.outcomes()[previous_count:]:
+                self._on_outcome_received(outcome)
+        return result
+
+    def _simulate_run_recovery(self) -> Mapping[str, object] | None:
+        if self.adapter is None:
+            return None
+        recovery = getattr(self.adapter, "simulate_run_recovery", None)
+        if not callable(recovery):
+            return None
+        return recovery()
+
+    def _submit_configuration_commands(
+        self,
+        messages: tuple[Mapping[str, object], ...],
+    ) -> SubmissionStatus:
+        if self.adapter is None:
+            raise RuntimeError("No adapter is configured; the configuration request was not sent.")
+        is_offline = self.adapter.status.mode == "offline-replay"
+        previous_count = len(self.adapter.outcomes()) if is_offline else 0
+        result = self.adapter.submit(messages)
+        if is_offline:
+            for outcome in self.adapter.outcomes()[previous_count:]:
+                self._on_outcome_received(outcome)
+            for snapshot in self.adapter.snapshots().values():
+                self._on_snapshot_updated(snapshot)
+        return result
+
+    def _submit_rampsoak_commands(
+        self,
+        messages: tuple[Mapping[str, object], ...],
+        *,
+        target: ZoneKey | None,
+        coalesce_key: str | None,
+    ) -> SubmissionStatus:
+        if self.adapter is None:
+            raise RuntimeError("No adapter is configured; the Ramp/Soak request was not sent.")
+        is_offline = self.adapter.status.mode == "offline-replay"
+        previous_count = len(self.adapter.outcomes()) if is_offline else 0
+        result = self.adapter.submit(messages, target=target, coalesce_key=coalesce_key)
+        if is_offline:
+            for outcome in self.adapter.outcomes()[previous_count:]:
+                self._on_outcome_received(outcome)
+            for snapshot in self.adapter.snapshots().values():
+                self._on_snapshot_updated(snapshot)
+        return result
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self.tabs.widget(index) is self.ramp_soak:
+            self.ramp_soak.on_tab_selected()
+
+    def _refresh_adapter_status(self) -> None:
+        if self.adapter is None:
+            return
+        refresh = getattr(self.adapter, "refresh_status", None)
+        if not callable(refresh):
+            return
+        result = refresh()
+        if result not in {"submitted", "coalesced"}:
+            self.configuration.show_message(
+                f"Service status refresh {result}; connection outcome remains unverified."
+            )
+
     def _is_current_generation(self, generation: int) -> bool:
         return (
             self.adapter is not None
@@ -229,11 +317,29 @@ class QtMainWindow(QMainWindow):
         self.mode_banner.setText(f"{status.message} — {status.provenance}{suffix}")
         self.statusBar().showMessage(status.message)
         self.overview.set_status(status)
+        service_writes_allowed = (
+            status.mode == "offline-replay"
+            or (
+                status.mode == "service"
+                and status.connected
+                and not bool(getattr(self.adapter, "read_only_mode", False))
+            )
+        )
+        self.configuration.set_adapter_status(
+            status,
+            service_writes_allowed=service_writes_allowed,
+        )
+        self.ramp_soak.set_adapter_status(
+            status,
+            writes_allowed=service_writes_allowed,
+        )
 
     def _on_snapshot_updated(self, snapshot) -> None:
         if self._is_current_generation(snapshot.generation):
             self.snapshot_models[snapshot.category] = snapshot
             self.overview.set_snapshot(snapshot)
+            self.configuration.set_snapshot(snapshot)
+            self.ramp_soak.set_snapshot(snapshot)
 
     def _on_history_updated(self, history) -> None:
         if self._is_current_generation(history.generation):
@@ -246,12 +352,16 @@ class QtMainWindow(QMainWindow):
         self.command_outcomes.append(outcome)
         del self.command_outcomes[:-100]
         self.overview.set_command_outcome(outcome)
+        self.configuration.set_command_outcome(outcome)
+        self.ramp_soak.set_command_outcome(outcome)
         self.statusBar().showMessage(f"{outcome.operation}: {outcome.result} — {outcome.message}")
 
     def closeEvent(self, event) -> None:
         if self._history_poll_timer is not None:
             self._history_poll_timer.stop()
         self.overview.shutdown()
+        self.configuration.shutdown()
+        self.ramp_soak.shutdown()
         if self.adapter is not None:
             self.adapter.shutdown()
         event.accept()

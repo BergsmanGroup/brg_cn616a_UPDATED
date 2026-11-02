@@ -17,57 +17,20 @@ from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
-from zoneinfo import ZoneInfo
 
 from .display_panels import StatePanel
+from .run_schedule import (
+    format_elapsed as _format_elapsed,
+    format_last_data_display as _format_last_data_display,
+    format_schedule_display as _format_schedule_display,
+    parse_pacific_schedule,
+)
 from .service_client import ServiceClient
 from .entry_behavior import select_all_on_focus
 from .snapshot_reader import StateSnapshotReader
 
 
 LOGGER = logging.getLogger("cn616a.gui")
-
-_DATETIME_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
-
-
-def _pacific_tz():
-    """Return the Pacific Time zone; requires the 'tzdata' package on Windows."""
-    try:
-        return ZoneInfo("America/Los_Angeles")
-    except Exception:
-        LOGGER.warning(
-            "America/Los_Angeles tzdata unavailable (install the 'tzdata' package); "
-            "falling back to the local machine timezone for run scheduling"
-        )
-        return datetime.now().astimezone().tzinfo
-
-
-def _format_elapsed(seconds: float) -> str:
-    total = int(max(0.0, seconds))
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
-
-def _format_schedule_display(iso_str: Optional[str]) -> str:
-    if not iso_str:
-        return "N/A"
-    try:
-        dt = datetime.fromisoformat(iso_str).astimezone(_pacific_tz())
-        return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
-    except Exception:
-        return iso_str
-
-
-def _format_last_data_display(iso_str: Optional[str]) -> str:
-    if not iso_str:
-        return "unknown"
-    try:
-        dt = datetime.fromisoformat(iso_str).astimezone(_pacific_tz())
-        return dt.strftime("%Y-%m-%d %I:%M:%S %p %Z")
-    except Exception:
-        return iso_str
-
 
 class RunPanel(StatePanel):
     """Start/stop a logging run mirrored into a custom directory, with optional scheduled auto-stop."""
@@ -198,18 +161,7 @@ class RunPanel(StatePanel):
             self._set_status(f"Service request {status}; try again when the service is available", ok=False)
 
     def _parse_schedule_datetime(self) -> Optional[datetime]:
-        text = self.schedule_dt_var.get().strip()
-        if not text:
-            return None
-        for fmt in _DATETIME_FORMATS:
-            try:
-                naive = datetime.strptime(text, fmt)
-            except ValueError:
-                continue
-            # Attaching ZoneInfo to a naive wall-clock time resolves the correct UTC
-            # offset automatically, including across DST transitions.
-            return naive.replace(tzinfo=_pacific_tz())
-        return None
+        return parse_pacific_schedule(self.schedule_dt_var.get())
 
     def _on_start_run(self):
         run_dir = self.run_dir_var.get().strip()

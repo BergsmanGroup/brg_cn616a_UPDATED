@@ -24,12 +24,15 @@ Hardware validation: NOT RUN — USER ONLY
   launch/default, and controller ownership are unchanged.
 
 ## Decisions and compatibility
-- Charts appear in the existing Overview trend area; zone selection follows the
-  verified Overview selection. A history/config/analysis identity mismatch
+- Charts appear in the existing Overview trend area; the embedded chart follows
+  the verified Overview selection. A history/config/analysis identity mismatch
   withholds chart data or metrics. Floating views have separate plot navigation
-  and visibility controls, but follow the Overview's selected zone.
+  and visibility controls.
 - Existing `viewer` settings and legacy `viewer_*` aliases are applied without
   importing Tk modules. Reader results are never modified by view controls.
+- Each floating chart stays on the zone selected when it was opened; the
+  embedded chart continues following the Overview selection. Floating charts
+  share the history reader and update independently for their pinned zones.
 - The default replay uses regular synthetic timestamps, so a visible gap is not
   guaranteed in that walkthrough. Temporary test histories include explicit
   gaps and verify that the rendered connection mask breaks at the original
@@ -38,6 +41,7 @@ Hardware validation: NOT RUN — USER ONLY
 ## Automated evidence
 | Command/test | Result/count | What it proves / does not prove |
 |---|---:|---|
+| `$env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe -m unittest -q tests.test_qt_gui_charts` | PASS, 10 | Includes a regression confirming a floated zone stays selected when Overview focus changes and refreshes from new shared history. |
 | `$env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe -m unittest -q tests.test_qt_gui_charts tests.test_gui_history_reader tests.test_qt_gui_overview tests.test_qt_gui_service_adapter tests.test_qt_gui_foundation` | PASS, 62 | Replay timestamps/values, gaps, viewer aliases, window changes, reader caps after 100,001 raw records, malformed lines, append/rotation/truncation, identity gating, float close/reopen, worker-thread transforms, coalescing, and UI heartbeat. |
 | `.\.venv\Scripts\python.exe -m compileall -q py\qt_gui tests\test_qt_gui_charts.py tests\test_gui_history_reader.py`; `.\.venv\Scripts\python.exe -m py.qt_gui --help`; `git diff --check` | PASS | Compilation, safe CLI help, and whitespace checks. No hardware or production service was started. |
 
@@ -52,8 +56,9 @@ missing temporary snapshots.
    `Remove-Item Env:\QT_QPA_PLATFORM -ErrorAction SilentlyContinue`, then
    `.\bat\gui_qt_start.bat --offline-replay`. Confirm **OFFLINE REPLAY / NO
    HARDWARE**.
-2. Select different Overview rows. Confirm the focused chart follows the zone
-   and displays PV, absolute SP, autotune SP, and available analysis metrics.
+2. Select Zone 1 and float its chart. Select Zone 2 in Overview. Confirm the
+   embedded chart follows Zone 2 while the floating chart remains on Zone 1,
+   with both charts displaying their respective PV and available analysis data.
 3. Change the Window selector, toggle SP/autotune/MAE, pan and zoom, then use
    Home to fit loaded history and Clear view to return to the selected window.
    Confirm the display resets do not erase history.

@@ -48,6 +48,7 @@ from .adapter import (
     snapshot_age_seconds,
 )
 from .charts import ChartsPanel
+from .run_recording import RecoverySimulator, RunRecordingCard, RunSubmitter
 
 
 ZONE_IDS = tuple(range(1, 7))
@@ -426,6 +427,8 @@ class OverviewPage(QWidget):
         ]
         | None = None,
         mock_scenario_setter: Callable[[str], None] | None = None,
+        run_command_submitter: RunSubmitter | None = None,
+        recovery_simulator: RecoverySimulator | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -435,6 +438,8 @@ class OverviewPage(QWidget):
         self._history_requester = history_requester
         self._command_submitter = command_submitter
         self._mock_scenario_setter = mock_scenario_setter
+        self._run_command_submitter = run_command_submitter
+        self._recovery_simulator = recovery_simulator
         self.dirty_readbacks = DirtyReadbackGuard()
         self._control_drafts: dict[ZoneKey, tuple[str, str, str]] = {}
         self._pending_target: ZoneKey | None = None
@@ -568,6 +573,12 @@ class OverviewPage(QWidget):
         detail_layout.addLayout(form)
         rail_layout.addWidget(_card("Focused zone  /  readbacks", "blue", detail_content))
         rail_layout.addWidget(self._build_zone_controls())
+        self.run_recording_card = RunRecordingCard(
+            self._run_command_submitter,
+            recovery_simulator=self._recovery_simulator,
+            parent=self,
+        )
+        rail_layout.addWidget(_card("Recording / data collection", "teal", self.run_recording_card))
         rail_layout.addStretch(1)
         rail = QScrollArea()
         rail.setObjectName("overviewRail")
@@ -914,6 +925,7 @@ class OverviewPage(QWidget):
         self._sync_zone_controls()
 
     def set_command_outcome(self, outcome: CommandOutcome) -> None:
+        self.run_recording_card.set_command_outcome(outcome)
         if self._pending_target is None or outcome.target != self._pending_target:
             return
         expected_index = len(self._pending_outcomes)
@@ -1051,6 +1063,7 @@ class OverviewPage(QWidget):
         ):
             self._clear_selection()
         self._status = status
+        self.run_recording_card.set_adapter_status(status)
         self.model.set_status(status)
         self.refresh_age()
         self._update_detail()
@@ -1301,4 +1314,5 @@ class OverviewPage(QWidget):
 
     def shutdown(self) -> None:
         self._age_timer.stop()
+        self.run_recording_card.shutdown()
         self.chart_panel.shutdown()

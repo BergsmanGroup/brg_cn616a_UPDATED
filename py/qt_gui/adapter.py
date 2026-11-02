@@ -20,11 +20,16 @@ READ_ONLY_OPERATIONS = frozenset(
     {
         "get_run_status",
         "get_service_config",
+        "get_service_config",
         "get_status",
         "ping",
         "read_config",
         "read_rampsoak",
     }
+)
+RUN_CONTROL_OPERATIONS = frozenset({"start_run", "stop_run", "set_run_schedule"})
+SERVICE_CONFIGURATION_OPERATIONS = frozenset(
+    {"set_service_config", "connect_serial", "disconnect_serial", "refresh_connection"}
 )
 _SESSION_GENERATIONS = count(1)
 

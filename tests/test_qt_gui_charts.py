@@ -274,6 +274,7 @@ class QtGuiChartsTests(unittest.TestCase):
         reader = session._history_reader
         first = panel.open_floating_window()
         second = panel.open_floating_window()
+        self.assertEqual((first.width(), first.height()), (1000, 560))
         self.assertEqual(len(panel._floating_windows), 2)
         self.assertIs(session._history_reader, reader)
         self.assertEqual(first.centralWidget().findChildren(QTimer), [])
@@ -287,6 +288,76 @@ class QtGuiChartsTests(unittest.TestCase):
         QTest.qWait(10)
         self.assertEqual(len(panel._floating_windows), 0)
         self.assertTrue(session._closed)
+
+    def test_floating_chart_stays_on_opened_zone_and_refreshes_its_history(self) -> None:
+        start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+        def make_history(revision: int, zone_1_start: float, zone_2_start: float) -> AdapterHistory:
+            times = [start + timedelta(seconds=index) for index in range(3)]
+            data = MappingProxyType(
+                {
+                    "telemetry": {
+                        1: {"times": times, "pv": [zone_1_start + i for i in range(3)]},
+                        2: {"times": times, "pv": [zone_2_start + i for i in range(3)]},
+                    },
+                    "analysis": {},
+                    "errors": [],
+                }
+            )
+            return AdapterHistory(
+                generation=1,
+                endpoint="offline-replay",
+                identity=IDENTITY,
+                data=data,
+                error=None,
+                source_identity=("chart-test", 2),
+                revision=revision,
+            )
+
+        def pv_values(chart: ChartWidget) -> list[float]:
+            values = chart.pv_curve.getData()[1]
+            return list(values) if values is not None else []
+
+        panel = ChartsPanel()
+        zone_2 = ZoneKey("chart-test", 2, 2)
+        panel.set_selection(1, ZONE)
+        panel.set_history(make_history(1, 100.0, 200.0))
+        deadline = time.monotonic() + 3.0
+        while (
+            pv_values(panel.chart) != [100.0, 101.0, 102.0]
+            and time.monotonic() < deadline
+        ):
+            QTest.qWait(20)
+
+        floating_window = panel.open_floating_window()
+        floating_chart = floating_window.centralWidget()
+        panel.set_selection(2, zone_2)
+        deadline = time.monotonic() + 3.0
+        while (
+            panel.chart._selection != (2, zone_2)
+            or pv_values(panel.chart) != [200.0, 201.0, 202.0]
+            or pv_values(floating_chart) != [100.0, 101.0, 102.0]
+        ) and time.monotonic() < deadline:
+            QTest.qWait(20)
+
+        self.assertEqual(panel.chart._selection, (2, zone_2))
+        self.assertEqual(floating_chart._selection, (1, ZONE))
+        self.assertEqual(pv_values(panel.chart), [200.0, 201.0, 202.0])
+        self.assertEqual(pv_values(floating_chart), [100.0, 101.0, 102.0])
+
+        panel.set_history(make_history(2, 110.0, 210.0))
+        deadline = time.monotonic() + 3.0
+        while (
+            pv_values(panel.chart) != [210.0, 211.0, 212.0]
+            or pv_values(floating_chart) != [110.0, 111.0, 112.0]
+        ) and time.monotonic() < deadline:
+            QTest.qWait(20)
+
+        self.assertEqual(pv_values(panel.chart), [210.0, 211.0, 212.0])
+        self.assertEqual(pv_values(floating_chart), [110.0, 111.0, 112.0])
+        floating_window.close()
+        panel.shutdown()
+        panel.close()
 
     def test_offline_history_reader_publishes_and_changes_window_without_new_reader(self) -> None:
         session = OfflineReplaySession()

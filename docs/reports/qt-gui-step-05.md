@@ -86,7 +86,10 @@ do not blindly retry.
 ## Feedback and disposition
 The user explicitly requested proceeding with Step 05 before completing the
 Step 04 offline walkthrough; that review is recorded as deferred, not accepted.
-Step 05's offline editing review is pending. No user hardware result is claimed.
+The user later said, “okay, that all looks good. proceed with step 6”; this
+explicit continuation waives the pending Step 05 offline editing review under
+the workflow, so it is recorded as deferred rather than as an observed
+walkthrough. No user hardware result is claimed.
 
 ## Risks, rollback and next handoff
 Configuration, recording/scheduling, Ramp/Soak, autotune triggers, and Logs are

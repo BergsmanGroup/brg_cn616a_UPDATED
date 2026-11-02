@@ -706,8 +706,8 @@ class QtOverviewTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(adapter.snapshot_calls, 1)
         self.assertEqual(window.overview.model.index(0, Column.PV).data(), "1.00")
-        self.assertEqual(window.findChildren(QSpinBox), [])
-        self.assertEqual(len(window.findChildren(QLineEdit)), 2)
+        self.assertEqual(window.overview.findChildren(QSpinBox), [])
+        self.assertEqual(len(window.overview.findChildren(QLineEdit)), 5)
         self.assertFalse(window.overview.sp_abs_entry.isEnabled())
         self.assertFalse(window.overview.autotune_sp_entry.isEnabled())
 
@@ -728,7 +728,13 @@ class QtOverviewTests(unittest.TestCase):
             self.app.processEvents()
         self.assertEqual(window.overview.model.index(0, Column.PV).data(), "7.00")
         self.assertEqual(window.overview.selected_zone_key, ZoneKey("TEST_BUS_A", 3, 2))
-        self.assertEqual(adapter.submissions, [])
+        self.assertTrue(adapter.submissions)
+        self.assertTrue(
+            all(
+                tuple(message.get("op") for message in messages) == ("get_run_status",)
+                for messages in adapter.submissions
+            )
+        )
         window.close()
         self.assertTrue(adapter.closed)
         self.assertFalse(window.overview._age_timer.isActive())

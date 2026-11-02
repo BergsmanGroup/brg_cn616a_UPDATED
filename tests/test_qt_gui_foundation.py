@@ -118,6 +118,9 @@ class QtGuiFoundationTests(unittest.TestCase):
 
     def test_four_tabs_mode_labels_and_read_only_default(self) -> None:
         window = QtMainWindow()
+        window.show()
+        self.app.processEvents()
+        self.assertEqual((window.width(), window.height()), (1500, 1400))
         self.assertEqual(
             [window.tabs.tabText(index) for index in range(window.tabs.count())],
             ["Overview", "Configuration", "Ramp/Soak", "Logs"],
