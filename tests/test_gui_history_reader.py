@@ -25,6 +25,64 @@ def _record(ts, telemetry=None, analysis=None):
 
 
 class HistoryReaderTests(unittest.TestCase):
+    def test_history_identity_is_exposed_and_mixed_sources_are_flagged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            logs_dir = Path(temporary)
+            timestamp = "2026-03-01T00:00:00+00:00"
+            (logs_dir / "cn616a_telemetry_log.jsonl").write_text(
+                _record(
+                    timestamp,
+                    {"zones": {"1": {"pv_c": 1}}},
+                ).replace(
+                    '"ts":',
+                    '"port":"COM_A","unit":1,"ts":',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            (logs_dir / "cn616a_analysis_log.jsonl").write_text(
+                json.dumps(
+                    {
+                        "ts": timestamp,
+                        "port": "COM_B",
+                        "unit": 1,
+                        "analysis": {"zones": {"1": {"avg_abs_error_c": 0.5}}},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = self._initial_result(logs_dir)
+
+        self.assertIsNone(result["source_identity"])
+        self.assertTrue(result["source_identity_conflict"])
+
+    def test_history_with_unidentified_records_has_no_source_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            logs_dir = Path(temporary)
+            timestamp = "2026-03-01T00:00:00+00:00"
+            telemetry = _record(timestamp, {"zones": {"1": {"pv_c": 1}}}).replace(
+                '"ts":',
+                '"port":"COM_A","unit":1,"ts":',
+                1,
+            )
+            (logs_dir / "cn616a_telemetry_log.jsonl").write_text(telemetry, encoding="utf-8")
+            (logs_dir / "cn616a_analysis_log.jsonl").write_text(
+                json.dumps(
+                    {
+                        "ts": timestamp,
+                        "analysis": {"zones": {"1": {"avg_abs_error_c": 0.5}}},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = self._initial_result(logs_dir)
+
+        self.assertIsNone(result["source_identity"])
+        self.assertFalse(result["source_identity_conflict"])
+        self.assertTrue(result["source_identity_missing"])
+
     def test_out_of_order_duplicate_zero_and_alias_values_are_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
             logs_dir = Path(temporary)

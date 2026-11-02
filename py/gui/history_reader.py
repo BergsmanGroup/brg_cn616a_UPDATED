@@ -194,6 +194,9 @@ class _HistoryEngine:
         self._pending_bytes = 0
         self._work_bytes = 0
         self._errors: List[str] = []
+        self._source_identities: set[Tuple[str, int]] = set()
+        self._source_identity_conflict = False
+        self._source_identity_missing = False
 
     @property
     def last_work_bytes(self) -> int:
@@ -290,6 +293,9 @@ class _HistoryEngine:
         self._pending_bytes = 0
         self._work_bytes = 0
         self._errors = []
+        self._source_identities = set()
+        self._source_identity_conflict = False
+        self._source_identity_missing = False
 
     def _scan_reload_step(self) -> bool:
         remaining = _MAX_WORK_BYTES
@@ -383,6 +389,7 @@ class _HistoryEngine:
         if len(cursor.pending) > _MAX_PARTIAL_LINE_BYTES:
             message = f"{cursor.path.name}: incomplete JSONL record exceeded the line limit"
             self._add_error(message)
+            self._source_identity_missing = True
             cursor.pending = b""
             cursor.discarding_line = True
 
@@ -393,15 +400,34 @@ class _HistoryEngine:
             obj = json.loads(line.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             self._add_error(f"Malformed {category} JSONL record: {exc}")
+            self._source_identity_missing = True
             return
         if not isinstance(obj, dict):
             self._add_error(f"Malformed {category} JSONL record: root is not an object")
+            self._source_identity_missing = True
             return
 
         timestamp = parse_iso_timestamp(obj.get("timestamp_pacific") or obj.get("ts"))
         if timestamp is None:
             self._add_error(f"Malformed {category} JSONL record: missing or invalid timestamp")
+            self._source_identity_missing = True
             return
+        bus_id = obj.get("bus_id", obj.get("port"))
+        controller_id = obj.get("controller_id", obj.get("unit"))
+        if (
+            isinstance(bus_id, str)
+            and bus_id.strip()
+            and isinstance(controller_id, int)
+            and not isinstance(controller_id, bool)
+            and 1 <= controller_id <= 247
+        ):
+            identity = (bus_id.strip(), controller_id)
+            if self._source_identities and identity not in self._source_identities:
+                self._source_identity_conflict = True
+            if len(self._source_identities) < 2:
+                self._source_identities.add(identity)
+        else:
+            self._source_identity_missing = True
         self._sequence += 1
         if category == "telemetry":
             zones = _zone_mapping(obj)
@@ -506,6 +532,15 @@ class _HistoryEngine:
             "bytes_read": self._pending_bytes,
             "work_bytes": self._work_bytes,
             "errors": list(dict.fromkeys(self._errors)),
+            "source_identity": (
+                next(iter(self._source_identities))
+                if len(self._source_identities) == 1
+                and not self._source_identity_conflict
+                and not self._source_identity_missing
+                else None
+            ),
+            "source_identity_conflict": self._source_identity_conflict,
+            "source_identity_missing": self._source_identity_missing,
         }
         self._pending_bytes = 0
         self._errors = []

@@ -106,7 +106,7 @@ The CLI is a thin TCP client. It creates one JSON command, sends it to the servi
 
 The Tkinter GUI reads state files directly for display and uses the same TCP command interface for control and service configuration.
 
-### Optional Qt foundation shell
+### Optional Qt GUI (in progress)
 
 The Qt GUI is an optional, separate launch path; it does not replace the Tk GUI
 or start the service. Install its dependencies and launch the repository-only
@@ -117,13 +117,35 @@ offline replay from the repository root:
 .\bat\gui_qt_start.bat --offline-replay
 ```
 
-The initial Qt foundation provides Overview, Configuration, Ramp/Soak, and Logs
-tabs with a prominent **OFFLINE REPLAY / NO HARDWARE** label. Its generated
-service-shaped files live in a temporary directory and use synthetic baseline
-data; analysis is mock-derived and outcomes are mock-only. No Qt controls have
-been migrated yet. Without `--offline-replay`, the shell is disconnected and
-read-only and does not probe a service endpoint. Use `.\bat\gui_start.bat` for
-the existing Tk application.
+The Qt shell provides Overview, Configuration, Ramp/Soak, and Logs tabs. The
+offline replay shows a prominent **OFFLINE REPLAY / NO HARDWARE** label. Its
+generated service-shaped files live in a temporary directory and use synthetic
+baseline data; analysis is mock-derived and outcomes are mock-only. The read-only
+Overview presents a sortable six-zone table, focused-zone readbacks, and source
+timestamps, age, and health. The replay is static, so its values become visibly
+stale after five seconds rather than appearing live. Selecting a zone or tab does
+not send commands. Charts, control widgets, and the other tabs remain unfinished;
+the [step 03 report](docs/reports/qt-gui-step-03.md) contains an offline
+walkthrough, including a simulated error. Without an explicit mode, the shell is
+disconnected and read-only and does not probe a service endpoint. Offline replay
+never falls back to a normal service endpoint.
+
+An explicit service mode is available for later user testing against an already
+running service. Set these PowerShell environment variables to the endpoint and
+state/log directory you have independently verified, then opt in:
+
+```powershell
+.\bat\gui_qt_start.bat --service --host $env:CN616A_SERVICE_HOST --port $env:CN616A_SERVICE_PORT --logs-dir $env:CN616A_SERVICE_LOGS
+```
+
+Service mode connects only to that selected endpoint and reads state from the
+selected directory; it does not start the service. The current Qt window has no
+migrated control widgets. Service mode and controller/hardware integration were
+not exercised during this development step. Use `.\bat\gui_start.bat` for the
+existing operational Tk application.
+
+The feature list below describes the existing GUI; those controls and charts
+have not yet been migrated to Qt.
 
 The tabs are:
 

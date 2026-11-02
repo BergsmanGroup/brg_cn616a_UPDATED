@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import copy
 import importlib.util
 import json
-import math
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -13,18 +11,28 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
+from py.gui.state_values import get_numeric, get_zone, get_zones
+
 from .adapter import (
+    AdapterSnapshot,
     AdapterStatus,
     CommandOutcome,
     ControllerIdentity,
     ControllerKey,
+    READ_ONLY_OPERATIONS,
+    SnapshotCategory,
+    SubmissionStatus,
+    ZoneKey,
+    messages_match_zone,
+    new_session_generation,
+    normalize_snapshot,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_DIR = REPO_ROOT / "tests" / "fixtures" / "cn616a-baseline-v1"
 ZONE_IDS = tuple(range(1, 7))
-SNAPSHOT_FILES = {
+SNAPSHOT_FILES: dict[SnapshotCategory, str] = {
     "telemetry": "cn616a_telemetry_state.json",
     "config": "cn616a_config_state.json",
     "rampsoak": "cn616a_rampsoak_state.json",
@@ -48,24 +56,15 @@ def _adapt_baseline() -> Any:
         sys.modules.pop(module_name, None)
 
 
-def _zone_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    number = float(value)
-    return number if math.isfinite(number) else None
-
-
 def _mock_analysis(telemetry: Mapping[str, Any]) -> dict[str, Any]:
-    zones = telemetry.get("zones", {})
-    if not isinstance(zones, dict):
-        zones = {}
+    zones = get_zones(dict(telemetry))
     result: dict[str, Any] = {}
     for zone_id in ZONE_IDS:
-        values = zones.get(str(zone_id), {})
-        if not isinstance(values, dict):
-            values = {}
-        pv = _zone_number(values.get("pv_c"))
-        setpoint = _zone_number(values.get("sp_abs_c"))
+        values = get_zone(zones, zone_id)
+        pv = get_numeric(values, "pv_c", "pv", "PV", "process_value_c", "process_value")
+        setpoint = get_numeric(
+            values, "sp_abs_c", "sp_abs", "sp_c", "sp", "SP_abs", "SP", "setpoint_c", "setpoint"
+        )
         result[str(zone_id)] = {
             "avg_abs_error_c": round(abs(pv - setpoint), 3)
             if pv is not None and setpoint is not None
@@ -80,6 +79,7 @@ class OfflineReplaySession:
     """Owns generated snapshots and logs; shutdown removes its temporary files."""
 
     def __init__(self) -> None:
+        self.generation = new_session_generation()
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="cn616a-qt-replay-")
         self.logs_dir = Path(self._temporary_directory.name)
         self.paths = MappingProxyType(
@@ -105,8 +105,10 @@ class OfflineReplaySession:
                 key=ControllerKey(bus_id="offline-replay", controller_id=1),
                 modbus_address=1,
             ),
+            generation=self.generation,
         )
-        self._snapshot_data: dict[str, dict[str, object]] = {}
+        self._snapshot_data: dict[SnapshotCategory, dict[str, object]] = {}
+        self._outcomes: list[CommandOutcome] = []
         self._closed = False
         try:
             self._write_replay()
@@ -202,11 +204,123 @@ class OfflineReplaySession:
         self._write_jsonl(self.paths["telemetry_log"], telemetry_records)
         self._write_jsonl(self.paths["analysis_log"], analysis_records)
 
-    def snapshots(self) -> Mapping[str, Mapping[str, object]]:
-        return copy.deepcopy(self._snapshot_data)
+    def snapshots(self) -> Mapping[str, AdapterSnapshot]:
+        snapshots = {}
+        for name, payload in self._snapshot_data.items():
+            snapshots[name] = normalize_snapshot(
+                name,
+                payload,
+                age_s=0.0,
+                stale=False,
+                error=None,
+                modified_at=None,
+                read_at=None,
+                generation=self.generation,
+                identity=self.status.target,
+            )
+        return MappingProxyType(snapshots)
 
     def outcomes(self) -> tuple[CommandOutcome, ...]:
-        return ()
+        return tuple(self._outcomes)
+
+    def is_current_generation(self, generation: int) -> bool:
+        return not self._closed and generation == self.generation
+
+    def submit(
+        self,
+        messages: Sequence[Mapping[str, object]],
+        *,
+        target: ZoneKey | None = None,
+        coalesce_key: str | None = None,
+    ) -> SubmissionStatus:
+        del coalesce_key
+        if not messages:
+            raise ValueError("at least one service message is required")
+        if self._closed:
+            self._record_mock_outcomes(
+                messages,
+                "not_sent",
+                "Offline session is closed; the request was not sent.",
+                target,
+            )
+            return "closed"
+
+        mutation = any(str(message.get("op", "unknown")) not in READ_ONLY_OPERATIONS for message in messages)
+        if any("unit" in message for message in messages):
+            return self._reject_mock(
+                messages,
+                target,
+                "The v1 service does not route commands using a unit field.",
+            )
+        if target is not None and (
+            self.status.target is None
+            or target.bus_id != self.status.target.key.bus_id
+            or target.controller_id != self.status.target.key.controller_id
+        ):
+            return self._reject_mock(
+                messages,
+                target,
+                "Offline target does not match this replay session.",
+            )
+        if mutation and (
+            target is None
+            or self.status.target is None
+            or not messages_match_zone(messages, target)
+        ):
+            return self._reject_mock(
+                messages,
+                target,
+                "Offline command target is missing or does not match the payload.",
+            )
+
+        for message in messages:
+            self._record_mock_outcome(
+                message,
+                "mock",
+                "SIMULATED ONLY; no service or hardware request was sent.",
+                target,
+            )
+        return "mocked"
+
+    def _reject_mock(
+        self,
+        messages: Sequence[Mapping[str, object]],
+        target: ZoneKey | None,
+        detail: str,
+    ) -> SubmissionStatus:
+        self._record_mock_outcomes(messages, "not_sent", detail, target)
+        return "rejected"
+
+    def _record_mock_outcomes(
+        self,
+        messages: Sequence[Mapping[str, object]],
+        result: str,
+        detail: str,
+        target: ZoneKey | None,
+    ) -> None:
+        for message in messages:
+            self._record_mock_outcome(message, result, detail, target)
+
+    def _record_mock_outcome(
+        self,
+        message: Mapping[str, object],
+        result: str,
+        detail: str,
+        target: ZoneKey | None,
+    ) -> None:
+        self._outcomes.append(
+            CommandOutcome(
+                operation=str(message.get("op", "unknown")),
+                result=result,
+                message=detail,
+                request_id=str(message["id"]) if "id" in message else None,
+                generation=self.generation,
+                target=target,
+                endpoint="offline-replay",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        del self._outcomes[:-100]
 
     def shutdown(self) -> None:
         if not self._closed:

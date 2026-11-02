@@ -1,7 +1,7 @@
 # Qt GUI step 01: foundation and safe offline replay
 Date: 2026-11-01
 Automated development gate: PASS
-Offline user UI gate: PENDING
+Offline user UI gate: DEFERRED BY USER
 Hardware validation: NOT RUN — USER ONLY
 
 ## Delivered
@@ -63,12 +63,14 @@ read-only foundation; no real-service mode or controller operations exist.
 Do not treat synthetic values as a hardware validation result.
 
 ## Feedback and disposition
-Offline user review is pending. No user observations have been received.
+The user said, “Okay. This looks fine, no comment. Proceed with the next
+prompt.” By that explicit request to continue, the offline UI review is deferred
+for this step; it is not recorded as formal acceptance.
 
 ## Risks, rollback and next handoff
 The Qt window is an explicitly incomplete shell, not a replacement for Tk.
 Continue to use `.\bat\gui_start.bat` for the operational application. Next
-prompt: `cn616a-qt-02-adapter.prompt.md`; do not begin it until this report's
-offline UI review is accepted, incorporated, or explicitly deferred. Read
+prompt: `cn616a-qt-02-adapter.prompt.md`; the user explicitly deferred the
+offline UI review by asking to continue. Read
 `py/qt_gui/adapter.py`, `py/qt_gui/offline.py`, and
 `py/qt_gui/__main__.py` as the implementation boundary.

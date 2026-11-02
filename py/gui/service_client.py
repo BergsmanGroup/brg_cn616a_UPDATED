@@ -31,7 +31,7 @@ class _Request:
 
 
 class ServiceClient:
-    """Serialize service requests on one bounded worker and deliver results on Tk's thread."""
+    """Serialize service requests and deliver results when polled by the caller."""
 
     def __init__(self, *, capacity: int = 32, timeout_s: float = 2.0):
         if capacity < 1:
@@ -98,7 +98,7 @@ class ServiceClient:
             return "submitted"
 
     def poll_results(self) -> int:
-        """Deliver completed work; call only from the Tk event thread."""
+        """Deliver completed work; call from the GUI event thread."""
         delivered = 0
         while True:
             try:
@@ -141,6 +141,21 @@ class ServiceClient:
                 request.token,
                 operations,
             )
+            result = {
+                "ok": False,
+                "outcomes": [
+                    self._outcome(message, "not_sent", "GUI shut down before the request was sent")
+                    for message in request.messages
+                ],
+                "coalesce_key": request.coalesce_key,
+            }
+            try:
+                self._results.put_nowait((request.token, result))
+            except queue.Full:
+                LOGGER.error(
+                    "Unable to retain shutdown outcome for unsent request %s",
+                    request.token,
+                )
 
     def _run(self) -> None:
         while not self._stopping.is_set():

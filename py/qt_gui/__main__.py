@@ -5,27 +5,46 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="CN616A Qt GUI (disconnected/read-only unless offline replay is selected)"
+        description="CN616A Qt GUI (disconnected/read-only unless a mode is explicitly selected)"
     )
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--offline-replay",
         action="store_true",
         help="Generate a temporary repository-baseline replay; never contacts a service or controller",
     )
+    modes.add_argument(
+        "--service",
+        action="store_true",
+        help="Connect to the explicitly supplied existing service endpoint",
+    )
+    parser.add_argument("--host", help="Service host; requires --service")
+    parser.add_argument("--port", type=int, help="Service TCP port; requires --service")
+    parser.add_argument("--logs-dir", type=Path, help="Service state/log directory; requires --service")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.service and (not args.host or args.port is None or args.logs_dir is None):
+        parser.error("--service requires --host, --port, and --logs-dir")
+    if args.service and not 1 <= args.port <= 65535:
+        parser.error("--port must be in the range 1..65535")
+    if not args.service and any(value is not None for value in (args.host, args.port, args.logs_dir)):
+        parser.error("--host, --port, and --logs-dir require --service")
     try:
         from PySide6.QtWidgets import QApplication
 
         from .offline import OfflineReplaySession
         from .window import QtMainWindow
+        if args.service:
+            from .service_adapter import QtServiceAdapter
     except ModuleNotFoundError as exc:
         if exc.name != "PySide6":
             raise
@@ -38,7 +57,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication(["cn616a-qt-gui"])
     app.setApplicationName("CN616A Qt GUI")
-    session = OfflineReplaySession() if args.offline_replay else None
+    if args.offline_replay:
+        session = OfflineReplaySession()
+    elif args.service:
+        session = QtServiceAdapter(args.host, args.port, args.logs_dir)
+    else:
+        session = None
     window = QtMainWindow(session)
     window.show()
     return app.exec()

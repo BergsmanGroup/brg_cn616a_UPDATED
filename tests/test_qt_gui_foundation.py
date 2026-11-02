@@ -19,9 +19,10 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from PySide6.QtCore import QTimer  # noqa: E402
 
+from py.gui.state_values import get_numeric, get_zone, get_zones  # noqa: E402
 from py.qt_gui.__main__ import build_parser, main  # noqa: E402
 from py.qt_gui.adapter import ControllerIdentity, ControllerKey, ZoneKey  # noqa: E402
-from py.qt_gui.offline import BASELINE_DIR, OfflineReplaySession  # noqa: E402
+from py.qt_gui.offline import BASELINE_DIR, OfflineReplaySession, _mock_analysis  # noqa: E402
 from py.qt_gui.window import QtMainWindow  # noqa: E402
 
 
@@ -50,6 +51,40 @@ class QtGuiFoundationTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--offline-replay", result.stdout)
+
+    def test_service_mode_requires_explicit_endpoint_before_qt_import(self) -> None:
+        valid = build_parser().parse_args(
+            [
+                "--service",
+                "--host",
+                "example.invalid",
+                "--port",
+                "12345",
+                "--logs-dir",
+                str(self.id()),
+            ]
+        )
+        self.assertTrue(valid.service)
+        invalid_arguments = (
+            ["--service"],
+            ["--host", "example.invalid", "--port", "12345", "--logs-dir", "."],
+            [
+                "--service",
+                "--host",
+                "example.invalid",
+                "--port",
+                "0",
+                "--logs-dir",
+                ".",
+            ],
+            ["--offline-replay", "--service"],
+        )
+        for arguments in invalid_arguments:
+            with self.subTest(arguments=arguments):
+                with redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as raised:
+                        main(arguments)
+                self.assertEqual(raised.exception.code, 2)
 
     def test_missing_qt_dependency_has_actionable_diagnostic(self) -> None:
         original_import = __import__
@@ -92,8 +127,9 @@ class QtGuiFoundationTests(unittest.TestCase):
             self.assertEqual(session.status.target.modbus_address, 1)
             snapshots = session.snapshots()
             self.assertEqual(set(snapshots), {"telemetry", "config", "rampsoak", "analysis", "service_config"})
-            self.assertIn("telemetry", snapshots["telemetry"])
-            self.assertIn("analysis", snapshots["analysis"])
+            self.assertIn("telemetry", snapshots["telemetry"].data)
+            self.assertIn("analysis", snapshots["analysis"].data)
+            self.assertTrue(snapshots["telemetry"].keyed_values)
             self.assertTrue(session.paths["telemetry_log"].is_file())
             with session.paths["telemetry_log"].open(encoding="utf-8") as stream:
                 telemetry_records = [json.loads(line) for line in stream]
@@ -109,6 +145,47 @@ class QtGuiFoundationTests(unittest.TestCase):
         self.assertFalse(temporary_dir.exists())
         self.assertEqual(hashlib.sha256(FIXTURE_ARCHIVE.read_bytes()).hexdigest(), before_archive)
         self.assertEqual(FIXTURE_MANIFEST.read_bytes(), before_manifest)
+
+    def test_offline_backend_returns_mock_outcome_without_network_fallback(self) -> None:
+        with OfflineReplaySession() as session:
+            target = ZoneKey("offline-replay", 1, 1)
+            with patch(
+                "socket.create_connection",
+                side_effect=AssertionError("offline replay attempted a service connection"),
+            ) as connect:
+                status = session.submit(
+                    [{"op": "set_sp_abs", "zone": 1, "value_c": 70.0}],
+                    target=target,
+                )
+            self.assertEqual(status, "mocked")
+            self.assertFalse(connect.called)
+            self.assertEqual(session.outcomes()[-1].result, "mock")
+            self.assertIn("SIMULATED ONLY", session.outcomes()[-1].message)
+
+    def test_mock_analysis_matches_the_replay_corpus_and_numeric_aliases(self) -> None:
+        with OfflineReplaySession() as session:
+            telemetry = [
+                json.loads(line)
+                for line in session.paths["telemetry_log"].read_text(encoding="utf-8").splitlines()
+            ]
+            analysis = [
+                json.loads(line)
+                for line in session.paths["analysis_log"].read_text(encoding="utf-8").splitlines()
+            ]
+        self.assertEqual(len(telemetry), len(analysis))
+        for sample, result in zip(telemetry, analysis):
+            zones = get_zones(sample, "telemetry")
+            for zone_id in range(1, 7):
+                zone = get_zone(zones, zone_id)
+                pv = get_numeric(zone, "pv_c", "pv", "PV", "process_value_c", "process_value")
+                sp = get_numeric(
+                    zone, "sp_abs_c", "sp_abs", "sp_c", "sp", "SP_abs", "SP", "setpoint_c", "setpoint"
+                )
+                expected = round(abs(pv - sp), 3) if pv is not None and sp is not None else None
+                self.assertEqual(result["analysis"][str(zone_id)]["avg_abs_error_c"], expected)
+
+        alternate = _mock_analysis({"zones": {"z1": {"PV": 0, "SP": -1}}})
+        self.assertEqual(alternate["1"]["avg_abs_error_c"], 1.0)
 
     def test_offline_startup_never_constructs_serial_or_calls_an_endpoint(self) -> None:
         serial_module = __import__("pymodbus.client.sync", fromlist=["ModbusSerialClient"])
