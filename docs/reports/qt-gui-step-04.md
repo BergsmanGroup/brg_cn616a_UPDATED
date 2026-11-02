@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 Automated development gate: PASS
-Offline user UI gate: PENDING
+Offline user UI gate: DEFERRED BY USER
 Hardware validation: NOT RUN — USER ONLY
 
 ## Delivered
@@ -68,8 +68,9 @@ missing temporary snapshots.
 made from replay charts. Hardware validation remains for the user.
 
 ## Feedback and disposition
-The step 03 offline UI review remains pending. The explicit request to continue
-waived that workflow checkpoint only; it is not recorded as acceptance.
+The user explicitly requested proceeding with Step 05 before completing the
+Step 04 offline walkthrough. The UI review is therefore deferred, not accepted;
+no visual or usability result is claimed.
 
 ## Risks, rollback and next handoff
 Embedded and floating rendering passed offline tests; the user walkthrough and

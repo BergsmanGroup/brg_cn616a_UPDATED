@@ -262,6 +262,9 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertIsNotNone(telemetry.age_s)
         self.assertGreater(telemetry.age_s, 0.1)
         self.assertEqual(telemetry.zone_values[1]["pv_c"], 0.0)
+        self._wait_for(
+            lambda: [request["op"] for request in endpoint.request_snapshot()] == ["get_status"]
+        )
         self.assertEqual(
             adapter.submit(
                 [{"op": "set_sp_abs", "zone": 1, "value_c": 70.0}],
@@ -309,6 +312,9 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertTrue(adapter.snapshots()["telemetry"].zone_values[1])
         self.assertFalse(adapter.snapshots()["telemetry"].keyed_values)
         self.assertEqual(adapter.submit([{"op": "get_status"}]), "submitted")
+        self._wait_for(
+            lambda: any(outcome.operation == "get_status" for outcome in adapter.outcomes())
+        )
         self.assertEqual(
             adapter.submit([{"op": "set_sp_abs", "zone": 1, "value_c": 70.0}]),
             "rejected",
@@ -318,7 +324,12 @@ class QtServiceAdapterTests(unittest.TestCase):
             [request["op"] for request in endpoint.request_snapshot()],
             ["get_status", "get_status"],
         )
-        self.assertEqual(adapter.outcomes()[-1].result, "not_sent")
+        self.assertTrue(
+            any(
+                outcome.operation == "set_sp_abs" and outcome.result == "not_sent"
+                for outcome in adapter.outcomes()
+            )
+        )
 
     def test_missing_telemetry_identity_blocks_writes_despite_identified_config(self) -> None:
         self._write_snapshots()
@@ -418,6 +429,147 @@ class QtServiceAdapterTests(unittest.TestCase):
         self.assertEqual(requests[2]["method"], "PID_CONTROL")
         self.assertTrue(all(isinstance(request["id"], str) for request in requests))
         self.assertTrue(all("unit" not in request for request in requests))
+
+    def test_overview_apply_sends_exact_zone_update_payload_order(self) -> None:
+        self._write_snapshots()
+        telemetry_path = self.logs_dir / "cn616a_telemetry_state.json"
+        telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+        telemetry["telemetry"]["zones"]["z1"]["control_method"] = "PID_CONTROL"
+        telemetry_path.write_text(json.dumps(telemetry), encoding="utf-8")
+        endpoint = self._endpoint(
+            {
+                "get_status": self._status_response,
+                "set_sp_abs": lambda request: {"id": request["id"], "ok": True},
+                "set_control_method": lambda request: {"id": request["id"], "ok": True},
+                "set_autotune_setpoint": lambda request: {"id": request["id"], "ok": True},
+            }
+        )
+        adapter = self._adapter(endpoint)
+        self._wait_for(lambda: not adapter.status.read_only)
+        window = QtMainWindow(adapter)
+        self.addCleanup(window.close)
+        self.assertEqual(window.overview.selected_zone_key, ZoneKey("COM_QT_TEST", 3, 1))
+        self.assertTrue(window.overview.sp_abs_entry.isEnabled())
+
+        page = window.overview
+        page.sp_abs_entry.setText("-2.5")
+        page.method_combo.setCurrentIndex(page.method_combo.findData("ON_OFF_CONTROL"))
+        page.autotune_sp_entry.setText("0")
+        page._control_form_edited()
+        page.apply_controls_button.click()
+        self._wait_for(lambda: len(adapter.outcomes()) == 3)
+
+        requests = endpoint.request_snapshot()
+        self.assertEqual(
+            [request["op"] for request in requests],
+            [
+                "get_status",
+                "set_sp_abs",
+                "set_control_method",
+                "set_autotune_setpoint",
+            ],
+        )
+        self.assertEqual(
+            [
+                {key: value for key, value in request.items() if key not in {"id"}}
+                for request in requests[1:]
+            ],
+            [
+                {"op": "set_sp_abs", "zone": 1, "value_c": -2.5},
+                {"op": "set_control_method", "zone": 1, "method": "ON_OFF_CONTROL"},
+                {"op": "set_autotune_setpoint", "zone": 1, "value_c": 0.0},
+            ],
+        )
+        self.assertTrue(all("unit" not in request for request in requests))
+        self.assertEqual(
+            [outcome.result for outcome in adapter.outcomes()],
+            ["confirmed_success"] * 3,
+        )
+        self.assertIn("awaiting fresh controller readback", page.control_status_label.text())
+
+    def test_read_only_service_mode_reads_live_snapshots_and_rejects_all_writes(self) -> None:
+        self._write_snapshots()
+        self._write_history("COM_QT_TEST", 3)
+        endpoint = self._endpoint({"get_status": self._status_response})
+        adapter = QtServiceAdapter(
+            endpoint.host,
+            endpoint.port,
+            self.logs_dir,
+            timeout_s=0.3,
+            poll_interval_ms=10,
+            history_hours=0.1,
+            read_only=True,
+        )
+        self.adapters.append(adapter)
+        self._wait_for(
+            lambda: adapter.status.connected
+            and adapter.status.controller_connected is True
+            and "telemetry" in adapter.snapshots()
+            and adapter.snapshots()["telemetry"].data is not None
+        )
+        self.assertTrue(adapter.status.read_only)
+        self.assertIn("READ-ONLY MODE", adapter.status.message)
+
+        window = QtMainWindow(adapter)
+        self.addCleanup(window.close)
+        page = window.overview
+        self.assertEqual(page.selected_zone_key, ZoneKey("COM_QT_TEST", 3, 1))
+        self.assertFalse(page.sp_abs_entry.isEnabled())
+        self.assertFalse(page.method_combo.isEnabled())
+        self.assertFalse(page.autotune_sp_entry.isEnabled())
+        self.assertFalse(page.apply_controls_button.isEnabled())
+
+        self.assertEqual(
+            adapter.submit(
+                [{"op": "set_sp_abs", "zone": 1, "value_c": 70.0}],
+                target=ZoneKey("COM_QT_TEST", 3, 1),
+            ),
+            "rejected",
+        )
+        self.assertEqual(adapter.outcomes()[-1].result, "not_sent")
+        self.assertIn("not ready for writes", adapter.outcomes()[-1].message)
+        self.assertEqual(
+            [request["op"] for request in endpoint.request_snapshot()],
+            ["get_status"],
+        )
+
+    def test_overview_partial_failure_reports_unsent_operations_without_retry(self) -> None:
+        self._write_snapshots()
+        endpoint = self._endpoint(
+            {
+                "get_status": self._status_response,
+                "set_sp_abs": lambda request: {"id": request["id"], "ok": True},
+                "set_control_method": lambda request: {
+                    "id": request["id"],
+                    "ok": False,
+                    "error": "rejected by fake",
+                },
+            }
+        )
+        adapter = self._adapter(endpoint)
+        self._wait_for(lambda: not adapter.status.read_only)
+        window = QtMainWindow(adapter)
+        self.addCleanup(window.close)
+        page = window.overview
+        page.sp_abs_entry.setText("1")
+        page.method_combo.setCurrentIndex(page.method_combo.findData("PID_CONTROL"))
+        page.autotune_sp_entry.setText("2")
+        page._control_form_edited()
+        page.apply_controls_button.click()
+        self._wait_for(lambda: len(adapter.outcomes()) == 3)
+
+        self.assertEqual(
+            [outcome.result for outcome in adapter.outcomes()],
+            ["confirmed_success", "confirmed_failure", "not_sent"],
+        )
+        self.assertIn("rejected", page.control_status_label.text())
+        self.assertIn("not sent", page.control_status_label.text())
+        self.assertIn("No automatic retry", page.control_status_label.text())
+        self.assertIn("not atomic", page.control_status_label.text())
+        self.assertEqual(
+            [request["op"] for request in endpoint.request_snapshot()],
+            ["get_status", "set_sp_abs", "set_control_method"],
+        )
 
     def test_delayed_endpoint_keeps_event_loop_and_tabs_responsive(self) -> None:
         self._write_snapshots()

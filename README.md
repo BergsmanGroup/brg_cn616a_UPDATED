@@ -120,15 +120,16 @@ offline replay from the repository root:
 The Qt shell provides Overview, Configuration, Ramp/Soak, and Logs tabs. The
 offline replay shows a prominent **OFFLINE REPLAY / NO HARDWARE** label. Its
 generated service-shaped files live in a temporary directory and use synthetic
-baseline data; analysis is mock-derived and outcomes are mock-only. The read-only
-Overview presents a sortable six-zone table, focused-zone readbacks, and source
-timestamps, age, and health. The replay is static, so its values become visibly
-stale after five seconds rather than appearing live. Selecting a zone or tab does
-not send commands. Charts, control widgets, and the other tabs remain unfinished;
-the [step 03 report](docs/reports/qt-gui-step-03.md) contains an offline
-walkthrough, including a simulated error. Without an explicit mode, the shell is
-disconnected and read-only and does not probe a service endpoint. Offline replay
-never falls back to a normal service endpoint.
+baseline data; analysis is mock-derived and outcomes are mock-only. The Overview
+presents a sortable six-zone table, focused-zone readbacks and charts,
+source timestamps, age, and health. The replay is static, so its values become
+visibly stale after five seconds rather than appearing live. Zone update controls
+are enabled only for the selected, verified target; in replay they exercise
+simulated success, rejection, partial, and unknown outcomes without sending a
+service or hardware request. Selecting a zone or tab does not apply edits.
+Configuration, Ramp/Soak, and Logs are still incomplete. Without an explicit
+mode, the shell is disconnected and read-only and does not probe a service
+endpoint. Offline replay never falls back to a normal service endpoint.
 
 An explicit service mode is available for later user testing against an already
 running service. Set these PowerShell environment variables to the endpoint and
@@ -138,14 +139,29 @@ state/log directory you have independently verified, then opt in:
 .\bat\gui_qt_start.bat --service --host $env:CN616A_SERVICE_HOST --port $env:CN616A_SERVICE_PORT --logs-dir $env:CN616A_SERVICE_LOGS
 ```
 
-Service mode connects only to that selected endpoint and reads state from the
-selected directory; it does not start the service. The current Qt window has no
-migrated control widgets. Service mode and controller/hardware integration were
-not exercised during this development step. Use `.\bat\gui_start.bat` for the
-existing operational Tk application.
+To use the Qt GUI as a **live read-only viewer** alongside an already-running
+service (for example, one that owns COM4), add `--read-only`:
 
-The feature list below describes the existing GUI; those controls and charts
-have not yet been migrated to Qt.
+```powershell
+.\bat\gui_qt_start.bat --service --read-only --host 127.0.0.1 --port 8765 --logs-dir .\logs
+```
+
+This mode reads live service snapshots but disables the zone editors and rejects
+mutating requests in the adapter itself. It does not start a service or open a
+serial port. The status banner identifies **READ-ONLY MODE**. Without
+`--read-only`, explicit service mode is writable when the service reports a
+connected controller and fresh, matching identity. In that mode the Overview's
+Apply action sends the ordered `set_sp_abs`, `set_control_method`, and
+`set_autotune_setpoint` requests through that existing service to the selected
+zone. Review the displayed controller identity and per-operation result before
+proceeding; a service acknowledgment is not controller readback. Live writes
+and controller behavior require user-only hardware validation. Use
+`.\bat\gui_start.bat` for the existing operational Tk application. The
+[Step 05 report](docs/reports/qt-gui-step-05.md) has the offline control
+walkthrough and test evidence.
+
+The feature list below describes the existing Tk GUI; Qt migration is in
+progress.
 
 The tabs are:
 

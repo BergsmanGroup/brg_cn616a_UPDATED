@@ -111,6 +111,7 @@ class OfflineReplaySession:
         )
         self._snapshot_data: dict[SnapshotCategory, dict[str, object]] = {}
         self._outcomes: list[CommandOutcome] = []
+        self._mock_command_scenario: str | None = None
         self._closed = False
         self._history_reader: IncrementalHistoryReader | None = None
         self._history_revision = 0
@@ -241,6 +242,13 @@ class OfflineReplaySession:
         self._history_revision = self._history_reader.request(history_hours)
         return self._history_revision
 
+    def set_mock_command_scenario(self, scenario: str) -> None:
+        if scenario not in {"success", "rejection", "partial", "unknown"}:
+            raise ValueError(f"Unknown offline command scenario: {scenario}")
+        if self._closed:
+            raise RuntimeError("Offline replay session is shut down")
+        self._mock_command_scenario = scenario
+
     def poll_history(self) -> AdapterHistory | None:
         if self._closed or self._history_reader is None:
             return None
@@ -335,14 +343,44 @@ class OfflineReplaySession:
                 "Offline command target is missing or does not match the payload.",
             )
 
-        for message in messages:
-            self._record_mock_outcome(
-                message,
-                "mock",
-                "SIMULATED ONLY; no service or hardware request was sent.",
-                target,
-            )
+        scenario = self._mock_command_scenario
+        if scenario is None:
+            for message in messages:
+                self._record_mock_outcome(
+                    message,
+                    "mock",
+                    "SIMULATED ONLY; no service or hardware request was sent.",
+                    target,
+                )
+        else:
+            for index, message in enumerate(messages):
+                result, detail = self._mock_outcome_for(scenario, index)
+                self._record_mock_outcome(message, result, detail, target)
         return "mocked"
+
+    @staticmethod
+    def _mock_outcome_for(scenario: str, index: int) -> tuple[str, str]:
+        if scenario == "success":
+            return (
+                "confirmed_success",
+                "SIMULATED ONLY; acknowledgment modeled; no request or readback occurred.",
+            )
+        if scenario == "rejection":
+            if index == 0:
+                return "confirmed_failure", "SIMULATED ONLY; first operation rejected."
+            return "not_sent", "SIMULATED ONLY; fail-stop sequence left this operation unsent."
+        if scenario == "partial":
+            if index == 0:
+                return (
+                    "confirmed_success",
+                    "SIMULATED ONLY; first operation acknowledged; no request or readback occurred.",
+                )
+            if index == 1:
+                return "confirmed_failure", "SIMULATED ONLY; second operation rejected."
+            return "not_sent", "SIMULATED ONLY; fail-stop sequence left this operation unsent."
+        if index == 0:
+            return "unknown", "SIMULATED ONLY; result unknown after modeled send; no retry was made."
+        return "not_sent", "SIMULATED ONLY; later operation not sent after the unknown result."
 
     def _reject_mock(
         self,

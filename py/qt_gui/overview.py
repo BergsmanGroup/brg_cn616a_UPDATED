@@ -5,24 +5,29 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import IntEnum
 
 from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
+    QLocale,
     QSortFilterProxyModel,
     Qt,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QDoubleValidator, QFocusEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QFormLayout,
     QFrame,
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPushButton,
     QScrollArea,
     QSplitter,
     QTableView,
@@ -36,7 +41,9 @@ from .adapter import (
     AdapterHistory,
     AdapterSnapshot,
     AdapterStatus,
+    CommandOutcome,
     ControllerIdentity,
+    SubmissionStatus,
     ZoneKey,
     snapshot_age_seconds,
 )
@@ -62,6 +69,22 @@ class Column(IntEnum):
 HEADERS = ("Zone", "PV (°C)", "SP (°C)", "Output (%)", "Method / loop", "MAE (°C)", "Equil.")
 NUMERIC_COLUMNS = {Column.PV, Column.SETPOINT, Column.OUTPUT, Column.ERROR}
 COLORS = {Column.PV: "#1264bd", Column.SETPOINT: "#9b5b00", Column.ERROR: "#6841a5"}
+FLOAT32_MAX = 3.4028234663852886e38
+CONTROL_FEEDBACK_PREFIXES = (
+    "APPLYING",
+    "SIMULATED",
+    "Service acknowledged",
+    "Fresh readback",
+    "Fresh controller",
+    "Readback",
+    "No automatic retry",
+    "Enter finite",
+    "Apply blocked",
+    "Request was not queued",
+    "set_sp_abs",
+    "set_control_method",
+    "set_autotune_setpoint",
+)
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -382,8 +405,14 @@ def _age_text(age: float | None) -> str:
     return f"{seconds // 3600} h {(seconds % 3600) // 60:02d} min old"
 
 
+class SelectAllLineEdit(QLineEdit):
+    def focusInEvent(self, event: QFocusEvent) -> None:
+        super().focusInEvent(event)
+        self.selectAll()
+
+
 class OverviewPage(QWidget):
-    """Prototype-inspired overview; selection only changes the local view."""
+    """Overview telemetry, charts, and target-bound zone update controls."""
 
     zone_selection_changed = Signal(object)
 
@@ -392,6 +421,11 @@ class OverviewPage(QWidget):
         *,
         stale_after_s: float = 5.0,
         history_requester: Callable[[float], int] | None = None,
+        command_submitter: Callable[
+            [tuple[Mapping[str, object], ...], ZoneKey], SubmissionStatus
+        ]
+        | None = None,
+        mock_scenario_setter: Callable[[str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -399,7 +433,19 @@ class OverviewPage(QWidget):
             raise ValueError("stale_after_s must be positive and finite")
         self.stale_after_s = stale_after_s
         self._history_requester = history_requester
+        self._command_submitter = command_submitter
+        self._mock_scenario_setter = mock_scenario_setter
         self.dirty_readbacks = DirtyReadbackGuard()
+        self._control_drafts: dict[ZoneKey, tuple[str, str, str]] = {}
+        self._pending_target: ZoneKey | None = None
+        self._pending_outcomes: list[CommandOutcome] = []
+        self._pending_messages: tuple[Mapping[str, object], ...] = ()
+        self._awaiting_readback: tuple[
+            ZoneKey, tuple[float, str, float], datetime
+        ] | None = None
+        self._controls_target: ZoneKey | None = None
+        self._updating_controls = False
+        self._control_status_text = "Select a verified zone to edit its command values."
         self.model = TelemetryTableModel(self)
         self.proxy = ZoneSortProxy(self)
         self.proxy.setSourceModel(self.model)
@@ -409,12 +455,15 @@ class OverviewPage(QWidget):
         self._selected_identity: ControllerIdentity | None = None
         self._require_selection = False
         self._build_ui()
+        if self._mock_scenario_setter is not None:
+            self._mock_scenario_setter("success")
         self._age_timer = QTimer(self)
         self._age_timer.setInterval(1000)
         self._age_timer.timeout.connect(self.refresh_age)
         self._age_timer.start()
         self.refresh_age()
         self._update_detail()
+        self._sync_zone_controls()
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -427,7 +476,7 @@ class OverviewPage(QWidget):
         subtitle = _label("Telemetry / select a zone for readbacks", name="overviewSubtitle")
         title_row.addWidget(subtitle)
         title_row.addStretch(1)
-        title_row.addWidget(_label("VIEW ONLY · controls not yet migrated", name="viewOnly"))
+        title_row.addWidget(_label("TARGET-BOUND · explicit Apply", name="viewOnly"))
         outer.addLayout(title_row)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -517,13 +566,8 @@ class OverviewPage(QWidget):
             self.detail_labels[key] = value
             form.addRow(field_name, value)
         detail_layout.addLayout(form)
-        detail_layout.addWidget(
-            _label(
-                "Read-only values. Setpoint, autotune and recording controls will be added later.",
-                name="readOnlyNote",
-            )
-        )
         rail_layout.addWidget(_card("Focused zone  /  readbacks", "blue", detail_content))
+        rail_layout.addWidget(self._build_zone_controls())
         rail_layout.addStretch(1)
         rail = QScrollArea()
         rail.setObjectName("overviewRail")
@@ -540,6 +584,451 @@ class OverviewPage(QWidget):
         splitter.addWidget(rail)
         splitter.setSizes([760, 330])
         outer.addWidget(splitter, 1)
+
+    def _build_zone_controls(self) -> QFrame:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(7)
+        self.control_target_label = _label("No verified target selected", name="focusIdentity")
+        layout.addWidget(self.control_target_label)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(6)
+        self.sp_abs_entry = SelectAllLineEdit()
+        self.sp_abs_entry.setObjectName("absoluteSetpoint")
+        sp_validator = QDoubleValidator(-FLOAT32_MAX, FLOAT32_MAX, 100, self)
+        sp_validator.setLocale(QLocale.c())
+        sp_validator.setNotation(QDoubleValidator.Notation.ScientificNotation)
+        self.sp_abs_entry.setValidator(sp_validator)
+        self.sp_abs_entry.validator().setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.method_combo = QComboBox()
+        self.method_combo.setObjectName("controlMethod")
+        self.method_combo.addItem("PID", "PID_CONTROL")
+        self.method_combo.addItem("ON/OFF", "ON_OFF_CONTROL")
+        self.autotune_sp_entry = SelectAllLineEdit()
+        self.autotune_sp_entry.setObjectName("autotuneSetpoint")
+        autotune_validator = QDoubleValidator(-FLOAT32_MAX, FLOAT32_MAX, 100, self)
+        autotune_validator.setLocale(QLocale.c())
+        autotune_validator.setNotation(QDoubleValidator.Notation.ScientificNotation)
+        self.autotune_sp_entry.setValidator(autotune_validator)
+        form.addRow(_label("Absolute SP (°C)", name="fieldLabel"), self.sp_abs_entry)
+        method_label = _label("Control method", name="fieldLabel")
+        method_label.setToolTip("Distinct from the Ramp/Soak control mode.")
+        self.method_combo.setToolTip("This selects control_method, not the profile control_mode.")
+        form.addRow(method_label, self.method_combo)
+        form.addRow(_label("Autotune SP (°C)", name="fieldLabel"), self.autotune_sp_entry)
+        layout.addLayout(form)
+
+        action_row = QHBoxLayout()
+        self.apply_controls_button = QPushButton("Apply to selected zone")
+        self.apply_controls_button.setObjectName("applyZoneUpdates")
+        self.discard_controls_button = QPushButton("Discard edits")
+        action_row.addWidget(self.apply_controls_button)
+        action_row.addWidget(self.discard_controls_button)
+        layout.addLayout(action_row)
+
+        self.mock_scenario_label = _label("SIMULATED OUTCOME (no service/hardware request)", name="readOnlyNote")
+        self.mock_scenario_combo = QComboBox()
+        self.mock_scenario_combo.setObjectName("mockOutcomeScenario")
+        for label, value in (
+            ("Success", "success"),
+            ("Rejected", "rejection"),
+            ("Partial sequence failure", "partial"),
+            ("Unknown after send", "unknown"),
+        ):
+            self.mock_scenario_combo.addItem(label, value)
+        scenario_row = QHBoxLayout()
+        scenario_row.addWidget(self.mock_scenario_label)
+        scenario_row.addWidget(self.mock_scenario_combo, 1)
+        layout.addLayout(scenario_row)
+        self.mock_scenario_label.hide()
+        self.mock_scenario_combo.hide()
+
+        self.control_status_label = _label(name="readOnlyNote")
+        layout.addWidget(self.control_status_label)
+
+        self.sp_abs_entry.textEdited.connect(self._control_form_edited)
+        self.autotune_sp_entry.textEdited.connect(self._control_form_edited)
+        self.method_combo.currentIndexChanged.connect(self._control_form_edited)
+        self.mock_scenario_combo.currentIndexChanged.connect(self._mock_scenario_changed)
+        self.apply_controls_button.clicked.connect(self._apply_zone_updates)
+        self.discard_controls_button.clicked.connect(self._discard_zone_edits)
+        return _card("Focused zone / updates", "blue", content)
+
+    def _control_write_ready(self, target: ZoneKey | None) -> bool:
+        status = self._status
+        if target is None or status is None or self._command_submitter is None:
+            return False
+        identity = status.target
+        if (
+            identity is None
+            or target.bus_id != identity.key.bus_id
+            or target.controller_id != identity.key.controller_id
+        ):
+            return False
+        if status.mode == "offline-replay":
+            return self._mock_scenario_setter is not None
+        return (
+            status.mode == "service"
+            and status.connected
+            and status.controller_connected is True
+            and not status.read_only
+        )
+
+    @staticmethod
+    def _format_control_value(value: float | None) -> str:
+        return f"{value:.8f}".rstrip("0").rstrip(".") if value is not None else ""
+
+    def _readback_controls(self, target: ZoneKey) -> tuple[str, str, str]:
+        row = self.model.row_for_zone(target.zone_id)
+        telemetry = row.telemetry
+        config = row.config
+        sp = _first(
+            _number(telemetry, "sp_abs_c", "sp_abs", "sp_c", "sp", "setpoint_c", "setpoint"),
+            _number(config, "sp_abs_c", "sp_abs", "sp_c", "sp", "setpoint_c", "setpoint"),
+        )
+        autotune_sp = _first(
+            _number(telemetry, "autotune_sp_c", "autotune_sp", "sp_autotune_c", "sp_autotune"),
+            _number(config, "autotune_sp_c", "autotune_sp", "sp_autotune_c", "sp_autotune"),
+        )
+        method = _first(
+            _field(telemetry, "control_method"),
+            _field(config, "control_method"),
+        )
+        normalized_method = str(method).strip().upper() if method is not None else ""
+        if normalized_method in {"PID", "PID_CONTROL"}:
+            method_value = "PID_CONTROL"
+        elif normalized_method in {"ON/OFF", "ON_OFF_CONTROL"}:
+            method_value = "ON_OFF_CONTROL"
+        else:
+            method_value = ""
+        return (
+            self._format_control_value(sp if isinstance(sp, float) else None),
+            method_value,
+            self._format_control_value(autotune_sp if isinstance(autotune_sp, float) else None),
+        )
+
+    def _sync_zone_controls(
+        self,
+        *,
+        update_values: bool = True,
+        force_values: bool = False,
+    ) -> None:
+        target = self.selected_zone_key
+        if target is not None and target in self._control_drafts:
+            values = self._control_drafts[target]
+        elif target is not None:
+            values = self._readback_controls(target)
+        else:
+            values = ("", "", "")
+        render_values = force_values or (
+            update_values
+            and (target != self._controls_target or target not in self._control_drafts)
+        )
+
+        self._updating_controls = True
+        try:
+            self.control_target_label.setText(
+                f"Apply target: {target.bus_id} · controller {target.controller_id} · zone {target.zone_id}"
+                if target is not None
+                else "No verified target selected"
+            )
+            if render_values:
+                self.sp_abs_entry.setText(values[0])
+                index = self.method_combo.findData(values[1])
+                self.method_combo.setCurrentIndex(index)
+                self.autotune_sp_entry.setText(values[2])
+                self._controls_target = target
+            offline = self._status is not None and self._status.mode == "offline-replay"
+            self.mock_scenario_label.setVisible(offline)
+            self.mock_scenario_combo.setVisible(offline)
+            if self._pending_target is not None:
+                self._control_status_text = (
+                    "APPLYING — waiting for per-operation outcomes for "
+                    f"zone {self._pending_target.zone_id}."
+                )
+            elif target is None:
+                self._control_status_text = (
+                    "Controller identity is not verified; zone updates are disabled."
+                )
+            elif not self._control_status_text.startswith(CONTROL_FEEDBACK_PREFIXES):
+                if not self._control_write_ready(target):
+                    self._control_status_text = (
+                        "Writes are disabled until the selected service reports a connected, "
+                        "fresh, verified controller. Replay edits are simulated only."
+                    )
+                elif self._status is not None and self._status.mode == "offline-replay":
+                    self._control_status_text = (
+                        "SIMULATED ONLY — choose an outcome scenario; no service or hardware request is sent."
+                    )
+                elif target in self._control_drafts:
+                    self._control_status_text = (
+                        f"Draft retained for zone {target.zone_id}; nothing has been sent."
+                    )
+                else:
+                    self._control_status_text = (
+                        "Edits stay scoped to this zone until Apply. "
+                        "Service acknowledgment is not readback."
+                    )
+            self.control_status_label.setText(self._control_status_text)
+        finally:
+            self._updating_controls = False
+
+        writable = self._control_write_ready(target) and self._pending_target is None
+        awaiting_current_readback = (
+            target is not None
+            and self._awaiting_readback is not None
+            and self._awaiting_readback[0] == target
+        )
+        for field in (self.sp_abs_entry, self.method_combo, self.autotune_sp_entry):
+            field.setEnabled(writable)
+        dirty = target is not None and target in self._control_drafts
+        parsed_values = (
+            self._parse_finite(self.sp_abs_entry.text()),
+            self.method_combo.currentData(),
+            self._parse_finite(self.autotune_sp_entry.text()),
+        )
+        valid = (
+            parsed_values[0] is not None
+            and parsed_values[1] in {"PID_CONTROL", "ON_OFF_CONTROL"}
+            and parsed_values[2] is not None
+        )
+        self.apply_controls_button.setEnabled(
+            bool(writable and dirty and valid and not awaiting_current_readback)
+        )
+        self.discard_controls_button.setEnabled(bool(writable and dirty))
+        self.mock_scenario_combo.setEnabled(
+            self._status is not None
+            and self._status.mode == "offline-replay"
+            and self._pending_target is None
+        )
+
+    @staticmethod
+    def _parse_finite(value: str) -> float | None:
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+        return number if math.isfinite(number) and abs(number) <= FLOAT32_MAX else None
+
+    def _control_form_edited(self, *_args: object) -> None:
+        if self._updating_controls:
+            return
+        target = self.selected_zone_key
+        if target is None:
+            return
+        self._control_drafts[target] = (
+            self.sp_abs_entry.text(),
+            str(self.method_combo.currentData() or ""),
+            self.autotune_sp_entry.text(),
+        )
+        self._control_status_text = (
+            f"Unsaved draft for zone {target.zone_id}; Apply sends only to this target."
+        )
+        self._sync_zone_controls(update_values=False)
+
+    def _mock_scenario_changed(self, _index: int) -> None:
+        if self._updating_controls or self._mock_scenario_setter is None:
+            return
+        scenario = self.mock_scenario_combo.currentData()
+        if isinstance(scenario, str):
+            self._mock_scenario_setter(scenario)
+        if self._status is not None and self._status.mode == "offline-replay":
+            self._control_status_text = (
+                f"SIMULATED ONLY — {self.mock_scenario_combo.currentText()} selected; "
+                "no service or hardware request is sent."
+            )
+            self.control_status_label.setText(self._control_status_text)
+
+    def _discard_zone_edits(self) -> None:
+        target = self.selected_zone_key
+        if target is None or self._pending_target is not None:
+            return
+        self._control_drafts.pop(target, None)
+        self._control_status_text = f"Draft for zone {target.zone_id} discarded; no command was sent."
+        self._sync_zone_controls(force_values=True)
+        self.control_status_label.setText(self._control_status_text)
+
+    def _apply_zone_updates(self) -> None:
+        target = self.selected_zone_key
+        if target is None or not self._control_write_ready(target) or self._pending_target is not None:
+            self._control_status_text = "Apply blocked: selected zone is not a verified writable target."
+            self._sync_zone_controls()
+            self.control_status_label.setText(self._control_status_text)
+            return
+        absolute_sp = self._parse_finite(self.sp_abs_entry.text())
+        autotune_sp = self._parse_finite(self.autotune_sp_entry.text())
+        method = self.method_combo.currentData()
+        if (
+            absolute_sp is None
+            or autotune_sp is None
+            or method not in {"PID_CONTROL", "ON_OFF_CONTROL"}
+        ):
+            self._control_status_text = (
+                "Enter finite numeric °C values and select PID or ON/OFF. No command was sent."
+            )
+            self._sync_zone_controls()
+            self.control_status_label.setText(self._control_status_text)
+            return
+
+        messages: tuple[Mapping[str, object], ...] = (
+            {"op": "set_sp_abs", "zone": target.zone_id, "value_c": absolute_sp},
+            {"op": "set_control_method", "zone": target.zone_id, "method": method},
+            {
+                "op": "set_autotune_setpoint",
+                "zone": target.zone_id,
+                "value_c": autotune_sp,
+            },
+        )
+        self._pending_target = target
+        self._pending_messages = messages
+        self._pending_outcomes = []
+        self._control_status_text = (
+            "SIMULATED APPLY — outcomes pending."
+            if self._status is not None and self._status.mode == "offline-replay"
+            else "APPLYING — waiting for per-operation service outcomes."
+        )
+        self._sync_zone_controls()
+        try:
+            status = self._command_submitter(messages, target)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._pending_target = None
+            self._pending_messages = ()
+            self._pending_outcomes = []
+            self._control_status_text = f"Request was not queued: {exc}"
+            self._sync_zone_controls()
+            self.control_status_label.setText(self._control_status_text)
+            return
+        if status in {"submitted", "mocked"} and self._pending_target is not None:
+            self._control_status_text = (
+                "SIMULATED APPLY — waiting for simulated outcomes."
+                if status == "mocked"
+                else "APPLYING — waiting for per-operation service outcomes."
+            )
+        elif self._pending_target is not None:
+            self._control_status_text = (
+                f"Request status: {status}; waiting for explicit operation outcomes."
+            )
+        self._sync_zone_controls()
+
+    def set_command_outcome(self, outcome: CommandOutcome) -> None:
+        if self._pending_target is None or outcome.target != self._pending_target:
+            return
+        expected_index = len(self._pending_outcomes)
+        if expected_index >= len(self._pending_messages):
+            return
+        if outcome.operation != self._pending_messages[expected_index].get("op"):
+            return
+        self._pending_outcomes.append(outcome)
+        lines = [
+            f"{item.operation}: {self._outcome_text(item.result)}"
+            for item in self._pending_outcomes
+        ]
+        simulated = outcome.endpoint == "offline-replay"
+        prefix = "SIMULATED ONLY — " if simulated else ""
+        self._control_status_text = prefix + "\n".join(lines)
+        if len(self._pending_outcomes) < len(self._pending_messages):
+            self._sync_zone_controls()
+            return
+
+        outcomes = tuple(self._pending_outcomes)
+        target = self._pending_target
+        messages = self._pending_messages
+        self._pending_target = None
+        self._pending_messages = ()
+        self._pending_outcomes = []
+        if all(item.result == "confirmed_success" for item in outcomes) and not simulated:
+            self._awaiting_readback = (
+                target,
+                (
+                    float(messages[0]["value_c"]),
+                    str(messages[1]["method"]),
+                    float(messages[2]["value_c"]),
+                ),
+                max(
+                    (item.created_at for item in outcomes if item.created_at is not None),
+                    default=datetime.now(timezone.utc),
+                ),
+            )
+            self._control_status_text = (
+                "Service acknowledged all three operations; awaiting fresh controller readback. "
+                "Acknowledgment alone is not success."
+            )
+        elif simulated:
+            self._control_status_text = (
+                "SIMULATED ONLY — "
+                + "\n".join(lines)
+                + "\nThe modeled sequence is not atomic. No service/hardware request or readback occurred."
+            )
+        else:
+            self._control_status_text += (
+                "\nThe sequence is not atomic. No automatic retry. "
+                "Review the outcome and controller state."
+            )
+        self._sync_zone_controls()
+        self.control_status_label.setText(self._control_status_text)
+
+    @staticmethod
+    def _outcome_text(result: str) -> str:
+        return {
+            "confirmed_success": "acknowledged (readback not verified)",
+            "confirmed_failure": "rejected",
+            "not_sent": "not sent",
+            "unknown": "unknown after send; do not retry blindly",
+            "mock": "simulated",
+        }.get(result, result)
+
+    def _reconcile_control_readback(self, snapshot: AdapterSnapshot) -> None:
+        pending = self._awaiting_readback
+        if (
+            pending is None
+            or snapshot.category != "telemetry"
+            or snapshot.data is None
+            or snapshot.error
+            or snapshot.stale
+            or snapshot.identity is None
+            or snapshot.identity.key.bus_id != pending[0].bus_id
+            or snapshot.identity.key.controller_id != pending[0].controller_id
+            or snapshot.source_time is None
+            or snapshot.source_time.tzinfo is None
+            or snapshot.source_time < pending[2]
+            or self.model.identity_mismatch("telemetry")
+        ):
+            return
+        target, expected, _acknowledged_at = pending
+        row = self.model.row_for_zone(target.zone_id)
+        telemetry = row.telemetry
+        actual_sp = _number(
+            telemetry, "sp_abs_c", "sp_abs", "sp_c", "sp", "setpoint_c", "setpoint"
+        )
+        actual_method = _field(telemetry, "control_method")
+        actual_autotune_sp = _number(
+            telemetry, "autotune_sp_c", "autotune_sp", "sp_autotune_c", "sp_autotune"
+        )
+        method_text = str(actual_method).strip().upper() if actual_method is not None else ""
+        method_matches = method_text in {expected[1], "PID" if expected[1] == "PID_CONTROL" else "ON/OFF"}
+        values_present = actual_sp is not None and actual_autotune_sp is not None
+        matches = (
+            values_present
+            and math.isclose(actual_sp, expected[0], rel_tol=1e-6, abs_tol=1e-4)
+            and method_matches
+            and math.isclose(actual_autotune_sp, expected[2], rel_tol=1e-6, abs_tol=1e-4)
+        )
+        if matches:
+            self._control_drafts.pop(target, None)
+            self._awaiting_readback = None
+            self._control_status_text = (
+                f"Fresh controller readback matches all requested values for zone {target.zone_id}."
+            )
+        else:
+            self._awaiting_readback = None
+            self._control_status_text = (
+                f"Fresh controller readback differs for zone {target.zone_id}; draft retained. "
+                "Review controller state before choosing another action."
+            )
+        self._sync_zone_controls()
 
     @property
     def selected_zone_id(self) -> int | None:
@@ -565,6 +1054,7 @@ class OverviewPage(QWidget):
         self.model.set_status(status)
         self.refresh_age()
         self._update_detail()
+        self._sync_zone_controls()
 
     def set_snapshot(self, snapshot: AdapterSnapshot) -> None:
         had_telemetry = self.model.has_telemetry
@@ -596,8 +1086,10 @@ class OverviewPage(QWidget):
             and not self._require_selection
         ):
             self._select_zone(1)
+        self._reconcile_control_readback(snapshot)
         self.refresh_age()
         self._update_detail()
+        self._sync_zone_controls()
 
     def set_history(self, history: AdapterHistory | None) -> None:
         self.chart_panel.set_history(history)
@@ -617,14 +1109,40 @@ class OverviewPage(QWidget):
         self.zone_selection_changed.emit(None)
         self.chart_panel.set_selection(None, None)
         self._update_detail()
+        self._sync_zone_controls()
 
     def _selection_changed(self, current: QModelIndex, _previous: QModelIndex) -> None:
         if current.isValid():
             self._selected_identity = self.model.telemetry_identity
             self._require_selection = False
+        target = self.selected_zone_key
+        if self._pending_target is None:
+            if (
+                target is not None
+                and self._awaiting_readback is not None
+                and self._awaiting_readback[0] == target
+            ):
+                self._control_status_text = (
+                    "Service acknowledged all three operations; awaiting fresh controller readback. "
+                    "Acknowledgment alone is not success."
+                )
+            elif target is not None and target in self._control_drafts:
+                self._control_status_text = (
+                    f"Draft retained for zone {target.zone_id}; nothing has been sent."
+                )
+            elif target is None:
+                self._control_status_text = (
+                    "Controller identity is not verified; zone updates are disabled."
+                )
+            else:
+                self._control_status_text = (
+                    "Edits stay scoped to this zone until Apply. "
+                    "Service acknowledgment is not readback."
+                )
         self.zone_selection_changed.emit(self.selected_zone_key)
         self.chart_panel.set_selection(self.selected_zone_id, self.selected_zone_key)
         self._update_detail()
+        self._sync_zone_controls()
 
     def _snapshot_status(self, category: str) -> str:
         snapshot = self.model.snapshot(category)
@@ -654,6 +1172,8 @@ class OverviewPage(QWidget):
             mode = "DISCONNECTED / READ-ONLY"
         elif status.mode == "offline-replay":
             mode = "OFFLINE REPLAY / STATIC · NO HARDWARE"
+        elif status.connected and not status.read_only:
+            mode = "SERVICE AND CONTROLLER CONNECTED · zone updates enabled"
         elif status.connected:
             mode = "SERVICE REACHABLE · READ-ONLY VIEW"
         else:

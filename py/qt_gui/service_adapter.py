@@ -71,6 +71,7 @@ class QtServiceAdapter(QObject):
         poll_interval_ms: int = 100,
         stale_after_s: float = 5.0,
         history_hours: float = 1.0,
+        read_only: bool = False,
     ) -> None:
         super().__init__()
         if not host.strip():
@@ -88,6 +89,7 @@ class QtServiceAdapter(QObject):
         self.endpoint = f"{self.host}:{self.port}"
         self.logs_dir = Path(logs_dir)
         self.stale_after_s = float(stale_after_s)
+        self.read_only_mode = bool(read_only)
         self._closing = False
         self._service_reachable = False
         self._controller_connected: bool | None = None
@@ -428,7 +430,8 @@ class QtServiceAdapter(QObject):
 
     def _refresh_status(self) -> None:
         writable = (
-            self._service_reachable
+            not self.read_only_mode
+            and self._service_reachable
             and self._controller_connected is True
             and self._target is not None
             and self._identity_warning is None
@@ -448,6 +451,11 @@ class QtServiceAdapter(QObject):
             message = "SERVICE REACHABLE — controller status is unknown."
         elif self._identity_warning:
             message = f"CONTROLLER CONNECTED — {self._identity_warning}"
+        elif self.read_only_mode:
+            message = (
+                "SERVICE AND CONTROLLER CONNECTED — READ-ONLY MODE; "
+                "all writes are disabled."
+            )
         elif self._target is not None:
             message = (
                 "SERVICE AND CONTROLLER CONNECTED — "

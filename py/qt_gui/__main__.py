@@ -23,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Connect to the explicitly supplied existing service endpoint",
     )
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="In --service mode, allow live reads but disable and reject all writes",
+    )
     parser.add_argument("--host", help="Service host; requires --service")
     parser.add_argument("--port", type=int, help="Service TCP port; requires --service")
     parser.add_argument("--logs-dir", type=Path, help="Service state/log directory; requires --service")
@@ -34,6 +39,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.service and (not args.host or args.port is None or args.logs_dir is None):
         parser.error("--service requires --host, --port, and --logs-dir")
+    if args.read_only and not args.service:
+        parser.error("--read-only requires --service")
     if args.service and not 1 <= args.port <= 65535:
         parser.error("--port must be in the range 1..65535")
     if not args.service and any(value is not None for value in (args.host, args.port, args.logs_dir)):
@@ -60,7 +67,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.offline_replay:
         session = OfflineReplaySession()
     elif args.service:
-        session = QtServiceAdapter(args.host, args.port, args.logs_dir)
+        session = QtServiceAdapter(
+            args.host,
+            args.port,
+            args.logs_dir,
+            read_only=args.read_only,
+        )
     else:
         session = None
     window = QtMainWindow(session)

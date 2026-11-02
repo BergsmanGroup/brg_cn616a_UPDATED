@@ -146,6 +146,43 @@ class QtOverviewTests(unittest.TestCase):
         self.addCleanup(page.shutdown)
         return page
 
+    def _writable_page(self, submitter) -> OverviewPage:
+        page = OverviewPage(command_submitter=submitter)
+        self.addCleanup(page.shutdown)
+        page.set_status(
+            AdapterStatus(
+                mode="service",
+                connected=True,
+                read_only=False,
+                provenance="test-owned cached data",
+                message="TEST SERVICE",
+                target=IDENTITY_A,
+                generation=GENERATION,
+                controller_connected=True,
+            )
+        )
+        page.set_snapshot(
+            _snapshot(
+                "telemetry",
+                {
+                    "zones": {
+                        "1": {
+                            "sp_abs_c": 0.0,
+                            "autotune_sp_c": 0.0,
+                            "control_method": "PID_CONTROL",
+                            "control_mode": "RAMP_SOAK",
+                        },
+                        "2": {
+                            "sp_abs_c": -5.0,
+                            "autotune_sp_c": 0.0,
+                            "control_method": "ON_OFF_CONTROL",
+                        },
+                    }
+                },
+            )
+        )
+        return page
+
     def test_model_roles_and_detail_text_preserve_aliases_zero_and_missing_values(self) -> None:
         page = self._page()
         page.set_status(_status())
@@ -487,6 +524,179 @@ class QtOverviewTests(unittest.TestCase):
         self.assertTrue(page.dirty_readbacks.apply_readback(first, "setpoint", lambda: applied.append("clean")))
         self.assertEqual(applied, ["gain", "zone", "controller", "clean"])
 
+    def test_zone_update_controls_are_target_bound_and_preserve_per_zone_drafts(self) -> None:
+        submissions = []
+
+        def submitter(messages, target):
+            submissions.append((messages, target))
+            return "submitted"
+
+        page = self._writable_page(submitter)
+        self.assertEqual(page.selected_zone_key, ZoneKey("TEST_BUS_A", 3, 1))
+        self.assertEqual(page.method_combo.currentData(), "PID_CONTROL")
+        self.assertTrue(page.sp_abs_entry.isEnabled())
+        self.assertTrue(page.apply_controls_button.isEnabled() is False)
+
+        page.sp_abs_entry.setText("-12.5")
+        page.method_combo.setCurrentIndex(page.method_combo.findData("ON_OFF_CONTROL"))
+        page.autotune_sp_entry.setText("0")
+        page._control_form_edited()
+        self.assertTrue(page.apply_controls_button.isEnabled())
+        page.set_snapshot(
+            _snapshot(
+                "telemetry",
+                {
+                    "zones": {
+                        "1": {"sp_abs_c": 99.0, "autotune_sp_c": 99.0, "control_method": "PID_CONTROL"},
+                        "2": {"sp_abs_c": -5.0, "autotune_sp_c": 0.0, "control_method": "ON_OFF_CONTROL"},
+                    }
+                },
+            )
+        )
+        self.assertEqual(page.sp_abs_entry.text(), "-12.5")
+        self.assertEqual(page.autotune_sp_entry.text(), "0")
+        page._select_zone(2)
+        self.assertEqual(page.selected_zone_key, ZoneKey("TEST_BUS_A", 3, 2))
+        self.assertEqual(page.sp_abs_entry.text(), "-5")
+        self.assertEqual(page.method_combo.currentData(), "ON_OFF_CONTROL")
+
+        page._select_zone(1)
+        self.assertEqual(page.sp_abs_entry.text(), "-12.5")
+        self.assertEqual(page.method_combo.currentData(), "ON_OFF_CONTROL")
+        page.discard_controls_button.click()
+        self.assertNotIn(ZoneKey("TEST_BUS_A", 3, 1), page._control_drafts)
+        self.assertEqual(page.sp_abs_entry.text(), "99")
+        self.assertEqual(page.method_combo.currentData(), "PID_CONTROL")
+        page.sp_abs_entry.setText("-12.5")
+        page.method_combo.setCurrentIndex(page.method_combo.findData("ON_OFF_CONTROL"))
+        page.autotune_sp_entry.setText("0")
+        page._control_form_edited()
+        page.apply_controls_button.click()
+        self.assertEqual(len(submissions), 1)
+        messages, target = submissions[0]
+        self.assertEqual(target, ZoneKey("TEST_BUS_A", 3, 1))
+        self.assertEqual(
+            list(messages),
+            [
+                {"op": "set_sp_abs", "zone": 1, "value_c": -12.5},
+                {"op": "set_control_method", "zone": 1, "method": "ON_OFF_CONTROL"},
+                {"op": "set_autotune_setpoint", "zone": 1, "value_c": 0.0},
+            ],
+        )
+        self.assertTrue(all("unit" not in message for message in messages))
+        self.assertEqual(page._pending_target, target)
+        self.assertFalse(page.sp_abs_entry.isEnabled())
+        self.assertFalse(page.apply_controls_button.isEnabled())
+
+    def test_zone_update_rejects_nonfinite_values_and_disables_unverified_targets(self) -> None:
+        submissions = []
+        page = self._writable_page(
+            lambda messages, target: submissions.append((messages, target)) or "submitted"
+        )
+        for invalid in ("nan", "inf", "-inf"):
+            page.sp_abs_entry.setText(invalid)
+            page._control_form_edited()
+            page._apply_zone_updates()
+            self.assertIn("No command was sent", page.control_status_label.text())
+        self.assertEqual(submissions, [])
+
+        page.set_status(_status())
+        self.assertFalse(page.sp_abs_entry.isEnabled())
+        self.assertFalse(page.apply_controls_button.isEnabled())
+        page._apply_zone_updates()
+        self.assertEqual(submissions, [])
+
+    def test_zone_update_outcomes_require_fresh_matching_readback(self) -> None:
+        submissions = []
+        page = self._writable_page(
+            lambda messages, target: submissions.append((messages, target)) or "submitted"
+        )
+        page.sp_abs_entry.setText("20")
+        page.autotune_sp_entry.setText("-1")
+        page._control_form_edited()
+        page._apply_zone_updates()
+        target = ZoneKey("TEST_BUS_A", 3, 1)
+        acknowledged_at = datetime.now(timezone.utc)
+        for operation in ("set_sp_abs", "set_control_method", "set_autotune_setpoint"):
+            page.set_command_outcome(
+                CommandOutcome(
+                    operation=operation,
+                    result="confirmed_success",
+                    message="service acknowledged",
+                    target=target,
+                    generation=GENERATION,
+                    endpoint="test-service",
+                    created_at=acknowledged_at,
+                )
+            )
+        self.assertIn("awaiting fresh controller readback", page.control_status_label.text())
+        self.assertIn(target, page._control_drafts)
+        self.assertFalse(page.apply_controls_button.isEnabled())
+
+        page.set_snapshot(
+            _snapshot(
+                "telemetry",
+                {
+                    "zones": {
+                        "1": {
+                            "sp_abs_c": 20.0,
+                            "autotune_sp_c": -1.0,
+                            "control_method": "PID_CONTROL",
+                        }
+                    }
+                },
+                timestamp=acknowledged_at + timedelta(seconds=2),
+            )
+        )
+        self.assertNotIn(target, page._control_drafts)
+        self.assertIn("Fresh controller readback matches", page.control_status_label.text())
+
+        self.assertEqual(len(submissions), 1)
+
+    def test_zone_update_mismatch_retains_draft_and_requires_explicit_next_action(self) -> None:
+        submissions = []
+        page = self._writable_page(
+            lambda messages, target: submissions.append((messages, target)) or "submitted"
+        )
+        page.sp_abs_entry.setText("20")
+        page.autotune_sp_entry.setText("-1")
+        page._control_form_edited()
+        page._apply_zone_updates()
+        target = ZoneKey("TEST_BUS_A", 3, 1)
+        acknowledged_at = datetime.now(timezone.utc)
+        for operation in ("set_sp_abs", "set_control_method", "set_autotune_setpoint"):
+            page.set_command_outcome(
+                CommandOutcome(
+                    operation=operation,
+                    result="confirmed_success",
+                    message="service acknowledged",
+                    target=target,
+                    generation=GENERATION,
+                    endpoint="test-service",
+                    created_at=acknowledged_at,
+                )
+            )
+        page.set_snapshot(
+            _snapshot(
+                "telemetry",
+                {
+                    "zones": {
+                        "1": {
+                            "sp_abs_c": 19.0,
+                            "autotune_sp_c": -1.0,
+                            "control_method": "PID_CONTROL",
+                        }
+                    }
+                },
+                timestamp=acknowledged_at + timedelta(seconds=1),
+            )
+        )
+        self.assertIn(target, page._control_drafts)
+        self.assertIsNone(page._awaiting_readback)
+        self.assertTrue(page.apply_controls_button.isEnabled())
+        self.assertIn("readback differs", page.control_status_label.text())
+        self.assertEqual(len(submissions), 1)
+
     def test_tab_and_row_selection_are_local_and_hidden_overview_keeps_updating(self) -> None:
         initial = _snapshot("telemetry", {"zones": {"1": {"pv_c": 1}, "2": {"pv_c": 2}}})
         adapter = CachedTestAdapter({"telemetry": initial})
@@ -497,7 +707,9 @@ class QtOverviewTests(unittest.TestCase):
         self.assertEqual(adapter.snapshot_calls, 1)
         self.assertEqual(window.overview.model.index(0, Column.PV).data(), "1.00")
         self.assertEqual(window.findChildren(QSpinBox), [])
-        self.assertEqual(window.findChildren(QLineEdit), [])
+        self.assertEqual(len(window.findChildren(QLineEdit)), 2)
+        self.assertFalse(window.overview.sp_abs_entry.isEnabled())
+        self.assertFalse(window.overview.autotune_sp_entry.isEnabled())
 
         with patch.object(adapter, "snapshots", side_effect=AssertionError("synchronous reread")), patch(
             "pathlib.Path.open", side_effect=AssertionError("synchronous file read")

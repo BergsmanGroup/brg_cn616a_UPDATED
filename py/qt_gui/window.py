@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
-from .adapter import QtAdapter
+from .adapter import QtAdapter, SubmissionStatus, ZoneKey
 from .overview import OverviewPage
 
 
@@ -124,9 +126,15 @@ class QtMainWindow(QMainWindow):
         history_requester = getattr(adapter, "request_history", None)
         if not callable(history_requester):
             history_requester = None
+        command_submitter = self._submit_zone_commands if adapter is not None else None
+        mock_scenario_setter = getattr(adapter, "set_mock_command_scenario", None)
+        if not callable(mock_scenario_setter):
+            mock_scenario_setter = None
         self.overview = OverviewPage(
             stale_after_s=float(stale_after),
             history_requester=history_requester,
+            command_submitter=command_submitter,
+            mock_scenario_setter=mock_scenario_setter,
         )
         self.tabs.addTab(self.overview, "Overview")
         for title, description in TAB_CONTENT[1:]:
@@ -192,6 +200,21 @@ class QtMainWindow(QMainWindow):
             return "Disconnected; no service or hardware access attempted."
         return self.adapter.status.message
 
+    def _submit_zone_commands(
+        self,
+        messages: tuple[Mapping[str, object], ...],
+        target: ZoneKey,
+    ) -> SubmissionStatus:
+        if self.adapter is None:
+            raise RuntimeError("No adapter is configured; the zone update was not sent.")
+        is_offline = self.adapter.status.mode == "offline-replay"
+        previous_count = len(self.adapter.outcomes()) if is_offline else 0
+        result = self.adapter.submit(messages, target=target)
+        if is_offline:
+            for outcome in self.adapter.outcomes()[previous_count:]:
+                self._on_outcome_received(outcome)
+        return result
+
     def _is_current_generation(self, generation: int) -> bool:
         return (
             self.adapter is not None
@@ -222,6 +245,7 @@ class QtMainWindow(QMainWindow):
             return
         self.command_outcomes.append(outcome)
         del self.command_outcomes[:-100]
+        self.overview.set_command_outcome(outcome)
         self.statusBar().showMessage(f"{outcome.operation}: {outcome.result} — {outcome.message}")
 
     def closeEvent(self, event) -> None:

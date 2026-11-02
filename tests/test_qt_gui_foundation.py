@@ -51,6 +51,7 @@ class QtGuiFoundationTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--offline-replay", result.stdout)
+        self.assertIn("--read-only", result.stdout)
 
     def test_service_mode_requires_explicit_endpoint_before_qt_import(self) -> None:
         valid = build_parser().parse_args(
@@ -65,6 +66,19 @@ class QtGuiFoundationTests(unittest.TestCase):
             ]
         )
         self.assertTrue(valid.service)
+        read_only = build_parser().parse_args(
+            [
+                "--service",
+                "--read-only",
+                "--host",
+                "example.invalid",
+                "--port",
+                "12345",
+                "--logs-dir",
+                str(self.id()),
+            ]
+        )
+        self.assertTrue(read_only.read_only)
         invalid_arguments = (
             ["--service"],
             ["--host", "example.invalid", "--port", "12345", "--logs-dir", "."],
@@ -78,6 +92,7 @@ class QtGuiFoundationTests(unittest.TestCase):
                 ".",
             ],
             ["--offline-replay", "--service"],
+            ["--read-only"],
         )
         for arguments in invalid_arguments:
             with self.subTest(arguments=arguments):
@@ -161,6 +176,69 @@ class QtGuiFoundationTests(unittest.TestCase):
             self.assertFalse(connect.called)
             self.assertEqual(session.outcomes()[-1].result, "mock")
             self.assertIn("SIMULATED ONLY", session.outcomes()[-1].message)
+
+    def test_offline_zone_update_scenarios_are_deterministic_and_never_use_network(self) -> None:
+        messages = [
+            {"op": "set_sp_abs", "zone": 1, "value_c": 0.0},
+            {"op": "set_control_method", "zone": 1, "method": "PID_CONTROL"},
+            {"op": "set_autotune_setpoint", "zone": 1, "value_c": -1.0},
+        ]
+        expected = {
+            "success": ["confirmed_success"] * 3,
+            "rejection": ["confirmed_failure", "not_sent", "not_sent"],
+            "partial": ["confirmed_success", "confirmed_failure", "not_sent"],
+            "unknown": ["unknown", "not_sent", "not_sent"],
+        }
+        with OfflineReplaySession() as session:
+            target = ZoneKey("offline-replay", 1, 1)
+            for scenario, results in expected.items():
+                session.set_mock_command_scenario(scenario)
+                before = len(session.outcomes())
+                with patch(
+                    "socket.create_connection",
+                    side_effect=AssertionError("offline replay attempted a service connection"),
+                ) as connect:
+                    self.assertEqual(session.submit(messages, target=target), "mocked")
+                outcomes = session.outcomes()[before:]
+                self.assertEqual([outcome.result for outcome in outcomes], results)
+                self.assertTrue(all("SIMULATED ONLY" in outcome.message for outcome in outcomes))
+                self.assertFalse(connect.called)
+
+    def test_offline_zone_update_controls_show_simulated_partial_result(self) -> None:
+        session = OfflineReplaySession()
+        window = QtMainWindow(session)
+        try:
+            page = window.overview
+            self.assertEqual(page.selected_zone_key, ZoneKey("offline-replay", 1, 1))
+            self.assertTrue(page.sp_abs_entry.isEnabled())
+            page.mock_scenario_combo.setCurrentIndex(page.mock_scenario_combo.findData("partial"))
+            page.sp_abs_entry.setText("0")
+            page.method_combo.setCurrentIndex(page.method_combo.findData("PID_CONTROL"))
+            page.autotune_sp_entry.setText("-1")
+            page._control_form_edited()
+            with patch(
+                "socket.create_connection",
+                side_effect=AssertionError("offline UI attempted a service connection"),
+            ) as connect:
+                page.apply_controls_button.click()
+            self.assertFalse(connect.called)
+            self.assertEqual(
+                [outcome.result for outcome in session.outcomes()],
+                ["confirmed_success", "confirmed_failure", "not_sent"],
+            )
+            self.assertIn("SIMULATED ONLY", page.control_status_label.text())
+            self.assertIn("No service/hardware request", page.control_status_label.text())
+
+            page.mock_scenario_combo.setCurrentIndex(page.mock_scenario_combo.findData("unknown"))
+            page.apply_controls_button.click()
+            self.assertEqual(
+                [outcome.result for outcome in session.outcomes()[-3:]],
+                ["unknown", "not_sent", "not_sent"],
+            )
+            self.assertIn("unknown after send", page.control_status_label.text())
+            self.assertIn("do not retry blindly", page.control_status_label.text())
+        finally:
+            window.close()
 
     def test_mock_analysis_matches_the_replay_corpus_and_numeric_aliases(self) -> None:
         with OfflineReplaySession() as session:

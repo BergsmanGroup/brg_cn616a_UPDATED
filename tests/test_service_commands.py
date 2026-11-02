@@ -119,6 +119,20 @@ class ServiceCommandTests(unittest.TestCase):
         self.assertTrue(resp["ok"])
         self.assertEqual(self.svc.ctl.last_call, ("set_sp_abs", 2, 99.5))
 
+    def test_set_control_method_dispatches_to_controller(self):
+        resp = self.svc.handle_command(
+            {"id": "x", "op": "set_control_method", "zone": 2, "method": "ON_OFF_CONTROL"}
+        )
+        self.assertTrue(resp["ok"])
+        self.assertEqual(self.svc.ctl.last_call, ("set_control_method", 2, "ON_OFF_CONTROL"))
+
+    def test_set_autotune_setpoint_dispatches_to_controller(self):
+        resp = self.svc.handle_command(
+            {"id": "x", "op": "set_autotune_setpoint", "zone": 2, "value_c": 0.0}
+        )
+        self.assertTrue(resp["ok"])
+        self.assertEqual(self.svc.ctl.last_call, ("set_autotune_setpoint", 2, 0.0))
+
     def test_get_status_contains_service_config(self):
         resp = self.svc.handle_command({"id": "x", "op": "get_status"})
         self.assertTrue(resp["ok"])
