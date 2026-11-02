@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
 from .adapter import QtAdapter
@@ -77,6 +77,7 @@ class QtMainWindow(QMainWindow):
         super().__init__()
         self.adapter = adapter
         self._adapter_generation = adapter.generation if adapter is not None else None
+        self._history_poll_timer: QTimer | None = None
         self.snapshot_models = {}
         self.history_snapshot = None
         self.command_outcomes = []
@@ -120,7 +121,13 @@ class QtMainWindow(QMainWindow):
         stale_after = getattr(adapter, "stale_after_s", 5.0) if adapter is not None else 5.0
         if isinstance(stale_after, bool) or not isinstance(stale_after, (int, float)):
             raise TypeError("adapter stale_after_s must be numeric")
-        self.overview = OverviewPage(stale_after_s=float(stale_after))
+        history_requester = getattr(adapter, "request_history", None)
+        if not callable(history_requester):
+            history_requester = None
+        self.overview = OverviewPage(
+            stale_after_s=float(stale_after),
+            history_requester=history_requester,
+        )
         self.tabs.addTab(self.overview, "Overview")
         for title, description in TAB_CONTENT[1:]:
             page = QWidget()
@@ -136,6 +143,12 @@ class QtMainWindow(QMainWindow):
         self.statusBar().showMessage(self._status_text())
         self.overview.set_status(adapter.status if adapter is not None else None)
         if adapter is not None:
+            poll_history = getattr(adapter, "poll_history", None)
+            if callable(poll_history):
+                self._history_poll_timer = QTimer(self)
+                self._history_poll_timer.setInterval(100)
+                self._history_poll_timer.timeout.connect(self._poll_adapter_history)
+                self._history_poll_timer.start()
             status_changed = getattr(adapter, "status_changed", None)
             snapshot_updated = getattr(adapter, "snapshot_updated", None)
             history_updated = getattr(adapter, "history_updated", None)
@@ -150,6 +163,19 @@ class QtMainWindow(QMainWindow):
                 outcome_received.connect(self._on_outcome_received)
             for snapshot in adapter.snapshots().values():
                 self._on_snapshot_updated(snapshot)
+            history = getattr(adapter, "history", None)
+            if history is not None:
+                self._on_history_updated(history)
+
+    def _poll_adapter_history(self) -> None:
+        if self.adapter is None:
+            return
+        poll_history = getattr(self.adapter, "poll_history", None)
+        if not callable(poll_history):
+            return
+        history = poll_history()
+        if history is not None and history is not self.history_snapshot:
+            self._on_history_updated(history)
 
     def _mode_text(self) -> str:
         if self.adapter is None:
@@ -189,6 +215,7 @@ class QtMainWindow(QMainWindow):
     def _on_history_updated(self, history) -> None:
         if self._is_current_generation(history.generation):
             self.history_snapshot = history
+            self.overview.set_history(history)
 
     def _on_outcome_received(self, outcome) -> None:
         if not self._is_current_generation(outcome.generation):
@@ -198,6 +225,8 @@ class QtMainWindow(QMainWindow):
         self.statusBar().showMessage(f"{outcome.operation}: {outcome.result} — {outcome.message}")
 
     def closeEvent(self, event) -> None:
+        if self._history_poll_timer is not None:
+            self._history_poll_timer.stop()
         self.overview.shutdown()
         if self.adapter is not None:
             self.adapter.shutdown()

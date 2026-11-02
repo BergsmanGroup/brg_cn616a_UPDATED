@@ -19,6 +19,7 @@ from py.gui.service_client import ServiceClient, SubmitStatus as ClientSubmitSta
 from py.gui.snapshot_reader import StateSnapshotReader
 
 from .adapter import (
+    AdapterHistory,
     AdapterSnapshot,
     AdapterStatus,
     CommandOutcome,
@@ -43,17 +44,6 @@ SNAPSHOT_CATEGORIES: tuple[SnapshotCategory, ...] = (
     "service_config",
 )
 _MAX_OUTCOMES = 100
-
-
-@dataclass(frozen=True, slots=True)
-class AdapterHistory:
-    generation: int
-    endpoint: str
-    identity: ControllerIdentity | None
-    data: Mapping[str, object] | None
-    error: str | None
-    source_identity: tuple[str, int] | None
-    revision: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +132,14 @@ class QtServiceAdapter(QObject):
     @property
     def history(self) -> AdapterHistory | None:
         return self._history
+
+    def request_history(self, history_hours: float) -> int:
+        if QThread.currentThread() != self.thread():
+            raise RuntimeError("QtServiceAdapter.request_history must be called on its Qt thread")
+        if self._closing:
+            raise RuntimeError("QtServiceAdapter is shut down")
+        self._history_revision = self._history_reader.request(history_hours)
+        return self._history_revision
 
     def snapshots(self) -> Mapping[str, AdapterSnapshot]:
         return MappingProxyType(dict(self._snapshots))

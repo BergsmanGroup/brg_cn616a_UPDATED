@@ -7,7 +7,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import IntEnum
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, QTimer
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QSortFilterProxyModel,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -25,7 +32,15 @@ from PySide6.QtWidgets import (
 
 from py.gui.state_values import get_field, get_numeric
 
-from .adapter import AdapterSnapshot, AdapterStatus, ControllerIdentity, ZoneKey, snapshot_age_seconds
+from .adapter import (
+    AdapterHistory,
+    AdapterSnapshot,
+    AdapterStatus,
+    ControllerIdentity,
+    ZoneKey,
+    snapshot_age_seconds,
+)
+from .charts import ChartsPanel
 
 
 ZONE_IDS = tuple(range(1, 7))
@@ -370,11 +385,20 @@ def _age_text(age: float | None) -> str:
 class OverviewPage(QWidget):
     """Prototype-inspired overview; selection only changes the local view."""
 
-    def __init__(self, *, stale_after_s: float = 5.0, parent: QWidget | None = None) -> None:
+    zone_selection_changed = Signal(object)
+
+    def __init__(
+        self,
+        *,
+        stale_after_s: float = 5.0,
+        history_requester: Callable[[float], int] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         if not math.isfinite(stale_after_s) or stale_after_s <= 0:
             raise ValueError("stale_after_s must be positive and finite")
         self.stale_after_s = stale_after_s
+        self._history_requester = history_requester
         self.dirty_readbacks = DirtyReadbackGuard()
         self.model = TelemetryTableModel(self)
         self.proxy = ZoneSortProxy(self)
@@ -442,16 +466,11 @@ class OverviewPage(QWidget):
         )
         workspace_layout.addWidget(_card("Zone overview  /  select a row to focus", "navy", table_content))
 
-        chart_content = QWidget()
-        chart_layout = QVBoxLayout(chart_content)
-        chart_layout.setContentsMargins(14, 14, 14, 14)
-        chart_layout.addWidget(_label("Trend chart not yet migrated", name="placeholderTitle"))
-        chart_layout.addWidget(
-            _label("The selected zone's live and floating charts are planned for the next step.")
+        self.chart_panel = ChartsPanel(
+            self._history_requester,
+            parent=self,
         )
-        chart_layout.addStretch(1)
-        chart_content.setMinimumHeight(105)
-        workspace_layout.addWidget(_card("Focused zone  /  trend", "teal", chart_content))
+        workspace_layout.addWidget(_card("Focused zone  /  trend", "teal", self.chart_panel))
         workspace_layout.addStretch(1)
 
         rail_content = QWidget()
@@ -553,6 +572,10 @@ class OverviewPage(QWidget):
         selected_zone = self.selected_zone_id
         selected_identity = self._selected_identity
         self.model.set_snapshot(snapshot)
+        if snapshot.category == "service_config":
+            self.chart_panel.set_service_config(snapshot)
+        elif snapshot.category == "analysis":
+            self.chart_panel.set_analysis_snapshot(snapshot)
         new_identity = self.model.telemetry_identity
         if (
             snapshot.category == "telemetry"
@@ -576,6 +599,9 @@ class OverviewPage(QWidget):
         self.refresh_age()
         self._update_detail()
 
+    def set_history(self, history: AdapterHistory | None) -> None:
+        self.chart_panel.set_history(history)
+
     def _select_zone(self, zone_id: int) -> None:
         source_index = self.model.index(zone_id - 1, 0)
         index = self.proxy.mapFromSource(source_index)
@@ -588,12 +614,16 @@ class OverviewPage(QWidget):
         self._selected_identity = None
         self.zone_table.clearSelection()
         self.zone_table.setCurrentIndex(QModelIndex())
+        self.zone_selection_changed.emit(None)
+        self.chart_panel.set_selection(None, None)
         self._update_detail()
 
     def _selection_changed(self, current: QModelIndex, _previous: QModelIndex) -> None:
         if current.isValid():
             self._selected_identity = self.model.telemetry_identity
             self._require_selection = False
+        self.zone_selection_changed.emit(self.selected_zone_key)
+        self.chart_panel.set_selection(self.selected_zone_id, self.selected_zone_key)
         self._update_detail()
 
     def _snapshot_status(self, category: str) -> str:
@@ -751,3 +781,4 @@ class OverviewPage(QWidget):
 
     def shutdown(self) -> None:
         self._age_timer.stop()
+        self.chart_panel.shutdown()

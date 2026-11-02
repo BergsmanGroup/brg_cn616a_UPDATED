@@ -12,7 +12,13 @@ PY_DIR = REPO_ROOT / "py"
 if str(PY_DIR) not in sys.path:
     sys.path.insert(0, str(PY_DIR))
 
-from gui.history_reader import IncrementalHistoryReader, _HistoryEngine, _downsample_indices  # noqa: E402
+from gui.history_reader import (  # noqa: E402
+    IncrementalHistoryReader,
+    _HistoryEngine,
+    _MAX_RAW_POINTS_PER_ZONE,
+    _MAX_RENDER_POINTS_PER_ZONE,
+    _downsample_indices,
+)
 
 
 def _record(ts, telemetry=None, analysis=None):
@@ -207,6 +213,77 @@ class HistoryReaderTests(unittest.TestCase):
                 self.assertEqual(after_rotation["telemetry"][1]["pv"], [2.0, 3.0])
             finally:
                 reader.shutdown()
+
+    def test_malformed_records_are_reported_without_losing_valid_neighbors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            logs_dir = Path(temporary)
+            path = logs_dir / "cn616a_telemetry_log.jsonl"
+            path.write_text(
+                _record(
+                    "2026-03-01T00:00:00+00:00",
+                    {"zones": {"1": {"pv_c": 1}}},
+                ).replace('"ts":', '"port":"COM_A","unit":1,"ts":', 1)
+                + '{"invalid":\n'
+                + _record(
+                    "2026-03-01T00:00:01+00:00",
+                    {"zones": {"1": {"pv_c": 2}}},
+                ).replace('"ts":', '"port":"COM_A","unit":1,"ts":', 1),
+                encoding="utf-8",
+            )
+            result = self._initial_result(logs_dir)
+
+        self.assertEqual(result["telemetry"][1]["pv"], [1.0, 2.0])
+        self.assertTrue(any("Malformed telemetry JSONL record" in error for error in result["errors"]))
+        self.assertTrue(result["source_identity_missing"])
+
+    def test_raw_and_rendered_history_caps_hold_after_raw_point_overflow(self):
+        engine = _HistoryEngine(Path("."))
+        engine.window_hours = 1_000_000.0
+        base = datetime.fromisoformat("2026-03-01T00:00:00+00:00")
+        for index in range(_MAX_RAW_POINTS_PER_ZONE + 1):
+            timestamp = (base + timedelta(seconds=index)).isoformat()
+            telemetry = json.dumps(
+                {
+                    "ts": timestamp,
+                    "port": "COM_A",
+                    "unit": 1,
+                    "telemetry": {
+                        "zones": {
+                            "1": {
+                                "pv_c": float(index),
+                                "sp_abs_c": float(index + 1),
+                            }
+                        }
+                    },
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            analysis = json.dumps(
+                {
+                    "ts": timestamp,
+                    "port": "COM_A",
+                    "unit": 1,
+                    "analysis": {"zones": {"1": {"avg_abs_error_c": float(index)}}},
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            engine._consume_line("telemetry", telemetry)
+            engine._consume_line("analysis", analysis)
+
+        engine._prune()
+        self.assertLessEqual(len(engine._telemetry[1]), _MAX_RAW_POINTS_PER_ZONE)
+        self.assertLessEqual(len(engine._analysis[1]), _MAX_RAW_POINTS_PER_ZONE)
+        engine._finalize()
+        result = engine._result()
+        for category, series in (
+            ("telemetry", ("times", "pv", "sp", "sp_autotune")),
+            ("analysis", ("times", "mae")),
+        ):
+            for name in series:
+                self.assertLessEqual(
+                    len(result[category][1][name]),
+                    _MAX_RENDER_POINTS_PER_ZONE,
+                )
 
     def test_analysis_history_and_longer_window_reload(self):
         with tempfile.TemporaryDirectory() as temporary:

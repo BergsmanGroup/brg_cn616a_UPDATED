@@ -12,8 +12,10 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from py.gui.state_values import get_numeric, get_zone, get_zones
+from py.gui.history_reader import IncrementalHistoryReader
 
 from .adapter import (
+    AdapterHistory,
     AdapterSnapshot,
     AdapterStatus,
     CommandOutcome,
@@ -110,8 +112,13 @@ class OfflineReplaySession:
         self._snapshot_data: dict[SnapshotCategory, dict[str, object]] = {}
         self._outcomes: list[CommandOutcome] = []
         self._closed = False
+        self._history_reader: IncrementalHistoryReader | None = None
+        self._history_revision = 0
+        self._history: AdapterHistory | None = None
         try:
             self._write_replay()
+            self._history_reader = IncrementalHistoryReader(self.logs_dir)
+            self._history_revision = self._history_reader.request(1.0 / 3600.0)
         except Exception:
             self.shutdown()
             raise
@@ -150,7 +157,7 @@ class OfflineReplaySession:
                     "ts": timestamp,
                     "timestamp_pacific": timestamp,
                     "unit": 1,
-                    "port": "SYNTHETIC",
+                    "port": "offline-replay",
                     "zones": list(ZONE_IDS),
                     "telemetry": telemetry,
                 }
@@ -160,6 +167,7 @@ class OfflineReplaySession:
                     "ts": timestamp,
                     "timestamp_pacific": timestamp,
                     "unit": 1,
+                    "port": "offline-replay",
                     "analysis": _mock_analysis(telemetry),
                 }
             )
@@ -222,6 +230,60 @@ class OfflineReplaySession:
 
     def outcomes(self) -> tuple[CommandOutcome, ...]:
         return tuple(self._outcomes)
+
+    @property
+    def history(self) -> AdapterHistory | None:
+        return self._history
+
+    def request_history(self, history_hours: float) -> int:
+        if self._closed or self._history_reader is None:
+            raise RuntimeError("Offline replay session is shut down")
+        self._history_revision = self._history_reader.request(history_hours)
+        return self._history_revision
+
+    def poll_history(self) -> AdapterHistory | None:
+        if self._closed or self._history_reader is None:
+            return None
+        for result in self._history_reader.poll_results():
+            revision = result.get("revision")
+            if not isinstance(revision, int) or revision < self._history_revision:
+                continue
+            source_identity = result.get("source_identity")
+            if not (
+                isinstance(source_identity, tuple)
+                and len(source_identity) == 2
+                and isinstance(source_identity[0], str)
+                and isinstance(source_identity[1], int)
+            ):
+                source_identity = None
+            errors = result.get("errors", [])
+            error = "; ".join(str(item) for item in errors) or None
+            data: Mapping[str, object] | None = MappingProxyType(result)
+            identity = self.status.target
+            expected_identity = (
+                (identity.key.bus_id, identity.modbus_address)
+                if identity is not None
+                else None
+            )
+            if result.get("source_identity_conflict"):
+                error = "History contains multiple controller identities; history is withheld."
+                data = None
+            elif result.get("source_identity_missing"):
+                error = "History contains records with unknown controller identity; history is withheld."
+                data = None
+            elif expected_identity is None or source_identity != expected_identity:
+                error = "History source identity does not match the replay; history is withheld."
+                data = None
+            self._history = AdapterHistory(
+                generation=self.generation,
+                endpoint="offline-replay",
+                identity=identity if data is not None else None,
+                data=data,
+                error=error,
+                source_identity=source_identity,
+                revision=revision,
+            )
+        return self._history
 
     def is_current_generation(self, generation: int) -> bool:
         return not self._closed and generation == self.generation
@@ -325,6 +387,9 @@ class OfflineReplaySession:
     def shutdown(self) -> None:
         if not self._closed:
             self._closed = True
+            if self._history_reader is not None:
+                self._history_reader.shutdown()
+                self._history_reader = None
             self._temporary_directory.cleanup()
 
     def __enter__(self) -> OfflineReplaySession:

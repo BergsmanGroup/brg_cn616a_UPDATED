@@ -104,6 +104,17 @@ class AdapterSnapshot:
     keyed_values: Mapping[ZoneKey, Mapping[str, object]]
 
 
+@dataclass(frozen=True, slots=True)
+class AdapterHistory:
+    generation: int
+    endpoint: str
+    identity: ControllerIdentity | None
+    data: Mapping[str, object] | None
+    error: str | None
+    source_identity: tuple[str, int] | None
+    revision: int
+
+
 def snapshot_age_seconds(snapshot: AdapterSnapshot) -> float | None:
     """Calculate age from cached timestamps without rereading the source."""
     if snapshot.source_time is not None:
