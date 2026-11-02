@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CN616A Qt GUI - Visual Review Mockup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --navy: #102b46;
+      --blue: #0867cb;
+      --blue-2: #e8f2fb;
+      --line: #d3deea;
+      --ink: #172b3d;
+      --muted: #64778a;
+      --surface: #fff;
+      --page: #e8f0f8;
+      --green: #147047;
+      --amber: #905600;
+      --red: #b52e48;
+      --teal: #076f80;
+      --violet: #6841a5;
+      font: 12px "Segoe UI", Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; color: var(--ink); background: var(--page);
+      display: grid; grid-template-columns: 140px minmax(0, 1fr);
+      grid-template-rows: 48px auto 1fr auto; min-height: 100vh;
+    }
+    button, select, input { font: inherit; }
+    button, select, input { min-height: 28px; }
+    button {
+      border: 1px solid #b8c8d8; border-radius: 6px; color: var(--ink);
+      background: #f3f8fe; padding: 4px 9px; cursor: pointer; font-weight: 600;
+    }
+    button:hover { border-color: var(--blue); background: #f4f9fd; }
+    button:focus-visible, select:focus-visible, input:focus-visible {
+      outline: 3px solid #82b8ea; outline-offset: 2px;
+    }
+    .topbar {
+      grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+      padding: 6px 14px; color: white; background: linear-gradient(100deg, #07325c, #07569c);
+    }
+    .brand-mark {
+      display: grid; place-items: center; width: 34px; height: 34px;
+      border: 1px solid #7daed5; border-radius: 9px; color: #a9d8ff;
+      font-weight: 700;
+    }
+    .brand { font-size: 19px; font-weight: 650; letter-spacing: .1px; }
+    .sim-badge {
+      margin-left: auto; border: 1px solid #e6b96d; border-radius: 999px;
+      padding: 5px 10px; color: #ffe4ab; font-size: 11px; font-weight: 700;
+      letter-spacing: .08em;
+    }
+    .subhead {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+      padding: 12px 24px; background: white; border-bottom: 1px solid var(--line);
+    }
+    .subhead label { color: var(--muted); font-size: 12px; font-weight: 650; }
+    select, input {
+      border: 1px solid #bac9d8; border-radius: 5px; background: white;
+      color: var(--ink); padding: 6px 9px;
+    }
+    .notice { color: #614716; font-size: 12px; }
+    nav {
+      display: flex; gap: 4px; padding: 0 24px; background: white;
+      border-bottom: 1px solid var(--line);
+    }
+    nav button {
+      min-height: 34px; border: 0; border-radius: 5px; padding: 7px 10px;
+      color: #214a71; font-weight: 650; text-align: left;
+    }
+    nav button[aria-selected="true"] {
+      color: white; background: linear-gradient(100deg, #0879ed, #075ab7);
+      box-shadow: 0 2px 4px #16447630;
+    }
+    main { grid-column: 2; min-width: 0; padding: 10px 12px; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    .grid { display: grid; gap: 10px; }
+    .overview-grid { grid-template-columns: minmax(0, 1fr) 310px; align-items: start; }
+    .card {
+      min-width: 0; border: 1px solid #b9cde0; border-radius: 5px;
+      background: var(--surface); box-shadow: 0 1px 3px #1836510b;
+      overflow: hidden;
+    }
+    .card-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; min-height: 33px; padding: 6px 10px; color: white;
+      background: linear-gradient(100deg, #16456f, #25648e);
+      border-bottom: 1px solid #13436c;
+    }
+    .card-head .small, .card-head .legend { color: #e2effc; }
+    .card-head button { color: #084f94; background: #f1f7ff; }
+    .card-head select { min-height: 24px; padding: 2px 6px; }
+    .card-head .status-pill { color: #174b39; background: #d7f4e7; }
+    .card-head .status-pill.stale { color: #764800; background: #fff0c8; }
+    .card-head .record-indicator { color: #fff0f2; }
+    .card-head .record-indicator::before { background: #ff8296; }
+    .service-card > .card-head, .trend-card > .card-head { background: linear-gradient(100deg, #075965, #147f90); }
+    .recording > .card-head { background: linear-gradient(100deg, #71365f, #985377); }
+    .focus-card > .card-head { background: linear-gradient(100deg, #0758b0, #227cce); }
+    h1 { margin: 0 0 8px; font-size: 19px; color: #103c65; }
+    h1 .small { font-weight: 400; margin-left: 6px; }
+    h2 { margin: 0; font-size: 12px; font-weight: 700; }
+    h3 { margin: 0 0 8px; font-size: 13px; }
+    .card-body { padding: 10px; }
+    .muted, .small { color: var(--muted); }
+    .small { font-size: 11px; line-height: 1.4; }
+    .status-row { display: flex; align-items: center; gap: 8px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+    .online { color: var(--green); }
+    .online .dot { background: var(--green); }
+    .stale { color: var(--amber); }
+    .stale .dot { background: #d89824; }
+    .offline { color: var(--red); }
+    .offline .dot { background: var(--red); }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px;
+      border-radius: 4px; background: #edf2f8; font-size: 11px; font-weight: 650;
+    }
+    .status-pill.online { background: #def5e9; }
+    .status-pill.stale { background: #fff0cf; }
+    .status-pill.offline { background: #ffe4e9; }
+    .recording {
+      border-color: #e4c1c0;
+      background: linear-gradient(120deg, #fffafa, #fff);
+    }
+    .record-indicator { color: var(--red); font-weight: 700; }
+    .record-indicator::before {
+      content: ""; display: inline-block; width: 10px; height: 10px;
+      margin-right: 7px; border-radius: 50%; background: var(--red);
+    }
+    .record-indicator.active::before { animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .25; } }
+    .metric { font-size: 23px; font-weight: 700; color: var(--teal); font-variant-numeric: tabular-nums; }
+    .metric-label { font-size: 10px; color: #36576e; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; padding: 8px; }
+    .metric-grid > div { background: #edf8fa; border-left: 3px solid #3c9aaa; padding: 5px 8px; }
+    .stack { display: grid; gap: 10px; align-content: start; }
+    .button-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .primary { color: white; background: var(--blue); border-color: var(--blue); }
+    .danger { color: white; background: var(--red); border-color: var(--red); }
+    .table-wrap { width: 100%; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+    th, td { padding: 3px 8px; height: 29px; text-align: left; border-bottom: 1px solid #e0eaf3; }
+    th {
+      position: sticky; top: 0; color: #214d75; background: #e7f0fa;
+      font-size: 10px; text-transform: uppercase; letter-spacing: .03em;
+    }
+    tbody tr:nth-child(even) { background: #f4f8fc; }
+    tbody tr:hover { background: #e4f1ff; }
+    tbody tr.selected { background: #dcedff; box-shadow: inset 3px 0 #0873d5; }
+    td.pv { color: #0757b4; background: #1476d20b; font-weight: 700; }
+    td.sp { color: #945400; background: #efad2410; font-weight: 700; }
+    td.mae { color: var(--violet); font-weight: 600; }
+    td.pv, td.sp, td.mae { font-variant-numeric: tabular-nums; text-align: right; }
+    .equilibrium { display: inline-block; padding: 2px 5px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+    .equilibrium.yes { color: #10633d; background: #daf2e4; }
+    .equilibrium.no { color: #7f5708; background: #fff0cf; }
+    .focus-button { min-height: 23px; padding: 2px 6px; color: var(--blue); font-size: 11px; }
+    .zone-action.activate { color: #10633d; background: #e1f4e9; border-color: #9dcbb1; }
+    .zone-action.deactivate { color: #a42b42; background: #fff0f3; border-color: #e1a9b5; }
+    button:disabled, .zone-action:disabled { color: #6a7886; background: #edf0f3; border-color: #c9d2db; cursor: not-allowed; }
+    .control-grid { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 7px 8px; align-items: center; }
+    .control-grid label, .field-grid label { color: #395c7c; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+    #sp-input { color: #8b4e00; background: #fff3d4; border-color: #d6aa59; font-size: 15px; font-weight: 700; }
+    input, select { background: #f0f6ff; border-color: #9fbbd8; }
+    input[readonly] { background: #edf1f5; color: #53687b; border-color: #c5d1dc; }
+    .pid-values { color: var(--violet); background: #f2ecfa; border: 1px solid #d6c6ec; border-radius: 3px; padding: 5px; font-weight: 650; }
+    .chart {
+      position: relative; height: 150px; padding: 8px 10px 12px;
+      background:
+        linear-gradient(#e9eef3 1px, transparent 1px),
+        linear-gradient(90deg, #e9eef3 1px, transparent 1px),
+        #fff;
+      background-size: 100% 42px, 78px 100%;
+    }
+    .chart svg { width: 100%; height: 100%; }
+    .chart-line { fill: none; stroke: #1769d2; stroke-width: 3; }
+    .setpoint-line { fill: none; stroke: #b97909; stroke-width: 2; stroke-dasharray: 6 5; }
+    .legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; }
+    .config-grid { grid-template-columns: 165px minmax(0, 1fr); }
+    .side-nav { display: grid; gap: 5px; align-content: start; padding: 10px; }
+    .side-nav button { text-align: left; border: 0; }
+    .side-nav button.active { color: var(--blue); background: var(--blue-2); }
+    .config-content { display: grid; gap: 10px; }
+    .config-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .field-grid { display: grid; grid-template-columns: minmax(110px, .7fr) 1fr; gap: 7px 9px; align-items: center; }
+    .unit-cards { display: grid; gap: 5px; }
+    .unit-card { padding: 4px 7px; border: 1px solid var(--line); border-left: 3px solid #3f8c72; border-radius: 3px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+    .unit-card.stale { border-left-color: #c99323; }
+    .unit-card.offline { border-left-color: #c4425c; }
+    .unit-card strong { font-size: 11px; color: #234e75; }
+    .unit-card .small { flex-basis: 100%; }
+    .ramp-grid { grid-template-columns: minmax(0, 1.45fr) minmax(280px, .55fr); }
+    .segment-bar { height: 18px; border-radius: 4px; background: #d7e8f6; overflow: hidden; }
+    .segment-bar span { display: block; height: 100%; background: var(--blue); }
+    .log-grid { grid-template-columns: 270px minmax(0, 1fr); }
+    .log-category { padding: 9px 0; border-bottom: 1px solid #e7edf2; }
+    .callout {
+      margin-top: 8px; padding: 6px 8px; border-left: 3px solid #d59a2c;
+      background: #fff5dc; color: #674d1c; font-size: 11px; line-height: 1.4;
+    }
+    .dialog-backdrop {
+      position: fixed; inset: 0; z-index: 3; display: none; place-items: center;
+      padding: 20px; background: #0d233999;
+    }
+    .dialog-backdrop.open { display: grid; }
+    .floating-window { width: min(720px, 95vw); border-radius: 9px; background: white; box-shadow: 0 18px 60px #102b4670; }
+    .subhead { grid-column: 2; gap: 8px 12px; padding: 6px 12px; background: #f7fbff; }
+    nav { grid-column: 1; grid-row: 2 / 4; flex-direction: column; gap: 6px; padding: 12px 8px; background: #deebf8; border-right: 1px solid #b9cde0; }
+    footer { grid-column: 1 / -1; padding: 6px 14px; color: #526b82; border-top: 1px solid var(--line); background: #f6faff; font-size: 10px; }
+    .visual-key { display: flex; gap: 12px; padding: 5px 10px; background: #f0f6fc; color: #48617a; font-size: 10px; }
+    .visual-key .pv { color: #0757b4; font-weight: 700; }
+    .visual-key .sp { color: #945400; font-weight: 700; }
+    .visual-key .mae { color: var(--violet); font-weight: 700; }
+    .legend span:first-child { color: #c4e7ff; }
+    #health-cards { padding-top: 0; }
+    .log-category strong { color: #5d398e; }
+    #configuration .config-two:first-child > article:first-child > .card-head,
+    #rampsoak .stack > article:first-child > .card-head { background: linear-gradient(100deg, #075965, #147f90); }
+    #configuration .config-two:last-child > article:last-child > .card-head,
+    #rampsoak .ramp-grid > article > .card-head,
+    #logs .log-grid > article > .card-head { background: linear-gradient(100deg, #503481, #7954a8); }
+    #logs .stack > article:first-child > .card-head { background: linear-gradient(100deg, #71365f, #985377); }
+    #rampsoak td:nth-child(2) { color: #945400; background: #fff6e2; font-weight: 700; }
+    #rampsoak td:nth-child(3), #rampsoak td:nth-child(4) { color: #6841a5; font-variant-numeric: tabular-nums; }
+    @media (max-width: 980px) {
+      body { display: block; }
+      main { padding: 12px; }
+      .overview-grid, .config-grid, .ramp-grid, .log-grid { grid-template-columns: 1fr; }
+      .config-two { grid-template-columns: 1fr; }
+      .side-nav { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+      .unit-cards { grid-template-columns: 1fr; }
+      nav { flex-direction: row; overflow-x: auto; padding: 4px 8px; }
+      nav button { padding: 8px 11px; }
+      .topbar { min-height: 48px; flex-wrap: wrap; }
+      .brand { font-size: 16px; }
+      .sim-badge { font-size: 9px; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true">CN</div>
+    <div class="brand">CN616A Control Desk</div>
+    <span class="sim-badge">SIMULATION CONCEPT - NOT CONNECTED TO HARDWARE</span>
+  </header>
+  <div class="subhead">
+    <label for="controller-count">Preview scale</label>
+    <select id="controller-count" aria-label="Select simulation scale">
+      <option value="1">Single controller - 6 zones</option>
+      <option value="2" selected>Two controllers - 12 zones</option>
+      <option value="3">Three controllers - 18 zones</option>
+    </select>
+    <label for="controller-filter">Controller view</label>
+    <select id="controller-filter" aria-label="Filter by simulated controller">
+      <option value="all">All controllers</option>
+      <option value="1">Unit 01 - address 1</option>
+      <option value="2">Unit 02 - address 2</option>
+      <option value="3">Unit 03 - address 3</option>
+    </select>
+    <span class="notice">All displayed temperatures, states and actions are illustrative only.</span>
+  </div>
+  <nav role="tablist" aria-label="Primary navigation">
+    <button role="tab" aria-selected="true" aria-controls="overview" data-tab="overview">Overview</button>
+    <button role="tab" aria-selected="false" aria-controls="configuration" data-tab="configuration">Configuration</button>
+    <button role="tab" aria-selected="false" aria-controls="rampsoak" data-tab="rampsoak">Ramp / Soak</button>
+    <button role="tab" aria-selected="false" aria-controls="logs" data-tab="logs">Logs</button>
+  </nav>
+  <main>
+    <section id="overview" class="screen active" role="tabpanel">
+      <h1>Overview <span class="small">/ daily operation</span></h1>
+      <div class="grid overview-grid">
+        <div class="stack">
+        <article class="card">
+          <div class="card-head">
+            <h2>Zones</h2>
+            <span class="small" id="zone-count">12 simulated zones</span>
+          </div>
+          <div class="table-wrap">
+            <table aria-label="Simulated zone telemetry">
+              <thead><tr><th>Controller / addr</th><th>Zone</th><th>PV (C)</th><th>SP (C)</th><th>Mode / state</th><th>MAE (C)</th><th>Equilibrium</th><th>Action</th></tr></thead>
+              <tbody id="zones"></tbody>
+            </table>
+          </div>
+          <div class="visual-key"><span class="pv">PV / measured</span><span class="sp">SP / target</span><span class="mae">MAE / error</span><span>Equilibrium: software metric</span></div>
+        </article>
+        <article class="card trend-card">
+          <div class="card-head"><h2>Focused zone - live trend</h2><div class="legend"><span>PV (demo)</span><span style="color:#ffe0a2">SP (demo)</span></div></div>
+          <div class="chart" aria-label="Illustrative simulated temperature plot">
+            <svg viewBox="0 0 700 190" preserveAspectRatio="none" role="img" aria-label="Synthetic PV trend and setpoint">
+              <path class="setpoint-line" d="M0 94 H700"/>
+              <path class="chart-line" d="M0 120 C30 111 42 100 67 106 S110 128 140 118 S178 78 210 86 S250 101 280 88 S320 58 350 70 S389 110 420 104 S460 120 490 96 S530 61 560 73 S600 109 630 89 S670 64 700 75"/>
+            </svg>
+          </div>
+        </article>
+        </div>
+        <div class="stack">
+          <article class="card service-card">
+            <div class="card-head"><h2>Service health</h2><span id="demo-health-pill" class="status-pill online"><i class="dot"></i> Demo healthy</span></div>
+            <div class="card-body metric-grid">
+              <div><div class="metric">2</div><div class="metric-label">Simulated units</div></div>
+              <div><div class="metric">12</div><div class="metric-label">Configured zones</div></div>
+              <div><div class="metric">1.2 s</div><div class="metric-label">Latest demo update</div></div>
+              <div><div class="metric">0</div><div class="metric-label">Demo errors</div></div>
+            </div>
+            <div class="card-body"><div class="unit-cards" id="health-cards"></div></div>
+          </article>
+          <article class="card recording">
+            <div class="card-head"><h2>Data recording</h2><span class="record-indicator" id="record-state">Not recording</span></div>
+            <div class="card-body">
+              <div class="small">Would record all configured zones to the selected run directory.</div>
+              <div class="small" style="margin-top:8px">Path: <code>D:\Demo\Run-2026-01</code> (illustrative)</div>
+              <div class="button-row">
+                <button class="primary" id="record-toggle">Start recording (demo)</button>
+                <button>Choose path (demo)</button>
+              </div>
+            </div>
+          </article>
+        <article class="card focus-card">
+          <div class="card-head"><h2 id="focus-title">Focused zone - Unit 01 / Zone 1</h2><span class="status-pill online"><i class="dot"></i> Simulated</span></div>
+          <div class="card-body">
+            <div class="control-grid">
+              <label for="sp-input">Setpoint (C)</label><input id="sp-input" type="number" value="30.0" step="0.1">
+              <label for="mode-select">Control method</label><select id="mode-select"><option>PID</option><option>On / Off</option></select>
+              <label>Control mode</label><select><option>Standard</option><option>Ramp / Soak</option></select>
+              <label>PID gains (P / I / D)</label><span class="pid-values">2.4 / 0.12 / 18.0 <span class="small">(demo)</span></span>
+            </div>
+            <div class="button-row">
+              <button class="primary" id="autotune-button">Autotune… (demo)</button>
+              <button id="detach-chart">Open floating chart</button>
+            </div>
+            <div class="callout">No command is sent. Real autotune is high-power: require a setpoint, confirmation and hardware safety review.</div>
+          </div>
+        </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="configuration" class="screen" role="tabpanel">
+      <h1>Configuration <span class="small">/ bus, controller and zone settings</span></h1>
+      <div class="grid config-grid">
+        <aside class="card side-nav" aria-label="Configuration sections">
+          <button class="active">Bus & service</button><button>Controller units</button>
+          <button>Zone metadata</button><button>Polling & recording</button><button>Equilibrium</button>
+        </aside>
+        <div class="config-content">
+          <div class="config-two">
+            <article class="card">
+              <div class="card-head"><h2>RS-485 bus and service</h2><span class="status-pill online"><i class="dot"></i> Demo</span></div>
+              <div class="card-body field-grid">
+                <label>Serial port</label><input value="COM4 (illustrative)" readonly>
+                <label>Baud / parity / framing</label><input value="115200 / N / 8-N-1 (illustrative)" readonly>
+                <label>Telemetry target</label><input value="2 polls/s (proposal)">
+                <label>Bus owner</label><input value="PC service - Modbus master" readonly>
+                <label>TCP command endpoint</label><input value="127.0.0.1 (localhost only)" readonly>
+              </div>
+            </article>
+            <article class="card">
+              <div class="card-head"><h2>Configured controllers</h2><button class="focus-button">Add / discover (demo)</button></div>
+              <div class="table-wrap">
+                <table><thead><tr><th>Unit name</th><th>Model</th><th>Slave address</th><th>Status</th><th>Last response</th><th>Errors</th></tr></thead>
+                  <tbody id="controller-rows"></tbody>
+                </table>
+              </div>
+              <div class="card-body small">Every CN616A is a Modbus slave. The PC/service is the sole bus master. Discovery must never write or reassign addresses automatically.</div>
+            </article>
+          </div>
+          <article class="card">
+            <div class="card-head"><h2>Selected unit - Zone metadata</h2><select aria-label="Select unit"><option>Unit 01 - address 1</option><option>Unit 02 - address 2</option></select></div>
+            <div class="table-wrap"><table><thead><tr><th>Local zone</th><th>User label</th><th>Input / sensor</th><th>Enabled state</th><th>Default SP</th><th>Control mode</th></tr></thead><tbody id="config-zones"></tbody></table></div>
+          </article>
+          <div class="config-two">
+            <article class="card"><div class="card-head"><h2>Polling & recording</h2></div><div class="card-body field-grid">
+              <label>Telemetry interval</label><input value="500 ms">
+              <label>State snapshots</label><span>Atomic JSON snapshots (existing contract)</span>
+              <label>History output</label><span>JSONL, rotated; run data mirrors configured streams</span>
+              <label>Run file selection</label><span>All configured zones; no per-zone toggle</span>
+            </div></article>
+            <article class="card"><div class="card-head"><h2>Equilibrium criteria</h2></div><div class="card-body field-grid">
+              <label>Window / MAE threshold</label><input value="30 s / 0.25 C (demo)">
+              <label>Computed at</label><span>Service-side; software metric, not controller status</span>
+              <label>PV slope threshold</label><span>Not implemented in current service</span>
+              <label>Future override scope</label><span>Global now; optional per-zone later</span>
+            </div></article>
+          </div>
+        </div>
+      </div>
+      <div class="callout">This layout corrects the supplied chain diagram: do not label a CN616A as the master. Serial settings are bus-wide; slave address and unit naming are per controller; input and control data are per zone.</div>
+    </section>
+
+    <section id="rampsoak" class="screen" role="tabpanel">
+      <h1>Ramp / Soak <span class="small">/ profile editor and execution status</span></h1>
+      <div class="subhead" style="padding:10px 0;background:transparent;border:0">
+        <label>Controller <select><option>Unit 01 - address 1 (demo)</option><option>Unit 02 - address 2 (demo)</option></select></label>
+        <label>Local zone <select><option>Zone 1 - Demo Chamber</option><option>Zone 2 - Demo Stage</option></select></label>
+        <span class="status-pill online"><i class="dot"></i> Simulated profile state: Ramping</span>
+      </div>
+      <div class="grid ramp-grid">
+        <article class="card">
+          <div class="card-head"><h2>Profile segments</h2><span class="small">Maximum 20 segments per zone in manual</span></div>
+          <div class="table-wrap">
+            <table><thead><tr><th>#</th><th>Target (C)</th><th>Slope (C/min)</th><th>Hold (h)</th><th>Predicted phase</th><th>Progress</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>60.0</td><td>1.0</td><td>0.25</td><td>Ramping</td><td><div class="segment-bar"><span style="width:68%"></span></div></td></tr>
+                <tr><td>2</td><td>90.0</td><td>0.5</td><td>1.0</td><td>Pending</td><td><div class="segment-bar"><span style="width:0%"></span></div></td></tr>
+                <tr><td>3</td><td>40.0</td><td>0.8</td><td>0.5</td><td>Pending</td><td><div class="segment-bar"><span style="width:0%"></span></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card-body">
+            <div class="button-row"><button>Add segment (demo)</button><button>Validate profile (demo)</button><button class="primary">Save profile (demo only)</button></div>
+            <div class="callout">Profile start/stop/hold and end behavior must match the controller's actual control-mode semantics. No profile is sent by this mockup.</div>
+          </div>
+        </article>
+        <div class="stack">
+          <article class="card"><div class="card-head"><h2>Execution status</h2></div><div class="card-body">
+            <div class="metric">Segment 1 / 3</div><p class="small">Synthetic status only. Current phase: ramping toward 60 C.</p>
+            <div class="button-row"><button class="primary">Start (demo)</button><button>Hold (demo)</button><button class="danger">Stop (demo)</button></div>
+          </div></article>
+          <article class="card"><div class="card-head"><h2>Completion behavior</h2></div><div class="card-body field-grid">
+            <label>After final segment</label><select><option>Controller Stop behavior (verify)</option><option>Controller Hold behavior (verify)</option></select>
+            <label>Applies to</label><span>Selected controller + local zone only</span>
+          </div></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="logs" class="screen" role="tabpanel">
+      <h1>Logs <span class="small">/ recordings, events and diagnostics</span></h1>
+      <div class="grid log-grid">
+        <article class="card">
+          <div class="card-head"><h2>Sources</h2></div>
+          <div class="card-body">
+            <div class="log-category"><strong>Telemetry recording</strong><div class="small">JSONL measurements; run mirror</div></div>
+            <div class="log-category"><strong>Service events</strong><div class="small">Startup, connection, run transitions</div></div>
+            <div class="log-category"><strong>Controller errors</strong><div class="small">Per-unit communication failures</div></div>
+            <div class="log-category"><strong>GUI diagnostics</strong><div class="small">Local UI errors and crash logs</div></div>
+            <div class="callout">A stopped recording does not mean hardware is idle. Operational logs remain distinct from measurement recording.</div>
+          </div>
+        </article>
+        <div class="stack">
+          <article class="card">
+            <div class="card-head"><h2>Run recordings</h2><span class="record-indicator" id="logs-record-state">Not recording</span></div>
+            <div class="table-wrap"><table><thead><tr><th>Run</th><th>State</th><th>Started</th><th>Last data</th><th>Zones</th><th>Folder</th></tr></thead>
+              <tbody><tr><td>Demo run A</td><td>Recovered after service restart</td><td>13:40:00 (sim)</td><td>13:49:58 (sim)</td><td>12</td><td>Open (demo)</td></tr>
+                <tr><td>Demo run B</td><td>Stopped</td><td>09:10:00 (sim)</td><td>10:23:15 (sim)</td><td>6</td><td>Open (demo)</td></tr></tbody>
+            </table></div>
+          </article>
+          <article class="card">
+            <div class="card-head"><h2>Recent service events</h2><button>Export view (demo)</button></div>
+            <div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Unit</th><th>Category</th><th>Event / outcome</th><th>Detail</th></tr></thead>
+              <tbody><tr><td>13:50:12</td><td>Unit 02</td><td>Communication</td><td class="stale">Stale snapshot</td><td>Age exceeds display threshold (sim)</td></tr>
+                <tr><td>13:49:58</td><td>Unit 01</td><td>Recording</td><td>Telemetry appended</td><td>6 zone records (sim)</td></tr>
+                <tr><td>13:49:42</td><td>Service</td><td>Command</td><td>Setpoint confirmed by demo</td><td>Illustrative only; no real acknowledgment</td></tr>
+                <tr><td>13:46:05</td><td>Unit 03</td><td>Communication</td><td class="offline">Offline</td><td>No controller response (sim)</td></tr></tbody>
+            </table></div>
+          </article>
+        </div>
+      </div>
+      <div class="callout">The current service stores telemetry and operational history as JSONL plus latest-state JSON snapshots; the proposed UI should not imply CSV unless an explicit export feature is implemented.</div>
+    </section>
+  </main>
+  <footer>Concept layout only - no connection, data read, or control command is made. Focus changes the selected display context, never hardware state.</footer>
+  <div class="dialog-backdrop" id="chart-dialog" role="dialog" aria-modal="true" aria-label="Floating simulated chart">
+    <div class="floating-window">
+      <div class="card-head"><h2>Floating chart - Unit 01 / Zone 1 (simulated)</h2><button id="close-chart">Close</button></div>
+      <div class="chart" style="height:360px"><svg viewBox="0 0 700 300" preserveAspectRatio="none" role="img" aria-label="Detached synthetic temperature chart"><path class="setpoint-line" d="M0 145 H700"/><path class="chart-line" d="M0 210 C60 195 80 135 145 162 S220 226 290 160 S365 75 430 118 S520 190 580 110 S650 95 700 72"/></svg></div>
+      <div class="card-body small">A separate Qt window is proposed; it remains part of the same application process and service session.</div>
+    </div>
+  </div>
+  <script>
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    tabs.forEach(tab => tab.addEventListener("click", () => {
+      tabs.forEach(item => item.setAttribute("aria-selected", String(item === tab)));
+      document.querySelectorAll(".screen").forEach(screen => screen.classList.toggle("active", screen.id === tab.dataset.tab));
+    }));
+    const countSelect = document.getElementById("controller-count");
+    const filterSelect = document.getElementById("controller-filter");
+    let focused = 1;
+    let recording = false;
+    function controllerState(id, count) {
+      if (count === 3 && id === 3) return "offline";
+      if (count >= 2 && id === 2) return "stale";
+      return "online";
+    }
+    function draw() {
+      const count = Number(countSelect.value);
+      const countZones = count * 6;
+      const selectedFilter = filterSelect.value === "all" ? 0 : Number(filterSelect.value);
+      const zones = document.getElementById("zones");
+      zones.innerHTML = "";
+      if (focused > countZones) focused = 1;
+      document.getElementById("focus-title").textContent = `Focused zone - Unit ${String(Math.floor((focused - 1) / 6) + 1).padStart(2, "0")} / Zone ${((focused - 1) % 6) + 1}`;
+      for (let unit = 1; unit <= count; unit++) {
+        if (selectedFilter && selectedFilter !== unit) continue;
+        const status = controllerState(unit, count);
+        for (let local = 1; local <= 6; local++) {
+          const global = (unit - 1) * 6 + local;
+          const missing = status === "offline";
+          const row = document.createElement("tr");
+          row.className = global === focused ? "selected" : "";
+          row.innerHTML = `<td><span class="status-pill ${status}"><i class="dot"></i>Unit ${String(unit).padStart(2, "0")} / ${unit}</span></td>
+            <td>${local} / ${["Chamber","Stage","Valve","Sensor","Bench","Load"][local - 1]}</td>
+            <td class="pv">${missing ? "—" : (28 + local * 2.4 + unit * .2).toFixed(2)}</td>
+            <td class="sp">${missing ? "—" : (30 + local * 2).toFixed(2)}</td>
+            <td>${missing ? "Unknown" : "PID / Standard"}</td>
+            <td class="mae">${missing ? "—" : "0.0" + (local + 2)}</td>
+            <td><span class="equilibrium ${missing ? "" : local % 2 ? "no" : "yes"}">${missing ? "Unknown" : (local % 2 ? "No" : "Yes")}</span></td>
+            <td><button class="focus-button" data-focus="${global}">Focus</button>
+              <button class="focus-button zone-action ${local % 2 ? "deactivate" : "activate"}" data-enable="${global}" ${missing ? "disabled" : ""}>${missing ? "Unavailable" : (local % 2 ? "■ Deactivate" : "▶ Activate") + " (demo)"}</button></td>`;
+          zones.appendChild(row);
+        }
+      }
+      document.getElementById("zone-count").textContent = `${selectedFilter ? 6 : countZones} simulated zones`;
+      const health = document.getElementById("health-cards");
+      const configRows = document.getElementById("controller-rows");
+      const configZones = document.getElementById("config-zones");
+      health.innerHTML = "";
+      configRows.innerHTML = "";
+      configZones.innerHTML = "";
+      for (let id = 1; id <= count; id++) {
+        const state = controllerState(id, count);
+        const label = state[0].toUpperCase() + state.slice(1);
+        health.innerHTML += `<div class="unit-card ${state}"><strong>Unit ${String(id).padStart(2, "0")} / ${id}</strong><span class="status-pill ${state}"><i class="dot"></i>${label}</span><div class="small">${state === "online" ? "Last response: 1.2 s ago (sim)" : state === "stale" ? "Last response: 18 s ago (sim)" : "No response (sim)"} / zones 1-6</div></div>`;
+        configRows.innerHTML += `<tr><td>Unit ${String(id).padStart(2, "0")}</td><td>CN616A</td><td>${id}</td><td class="${state}">${label}</td><td>${state === "online" ? "1.2 s ago" : state === "stale" ? "18 s ago" : "Never"}</td><td>${state === "offline" ? 3 : state === "stale" ? 1 : 0} (sim)</td></tr>`;
+      }
+      for (let local = 1; local <= 6; local++) {
+        configZones.innerHTML += `<tr><td>${local}</td><td>${["Demo Chamber","Demo Stage","Demo Valve","Demo Sensor","Demo Bench","Demo Load"][local - 1]}</td><td>Type K (demo)</td><td>Enabled (unverified)</td><td>${20 + local * 10}.0</td><td>PID / Standard (demo)</td></tr>`;
+      }
+      document.querySelectorAll("[data-focus]").forEach(button => button.addEventListener("click", () => {
+        focused = Number(button.dataset.focus);
+        draw();
+      }));
+      document.querySelectorAll("[data-enable]").forEach(button => button.addEventListener("click", () => {
+        alert("Simulation only. This action sent no command. A production zone-disable action requires a verified service API and hardware safety review.");
+      }));
+      const healthPill = document.getElementById("demo-health-pill");
+      healthPill.innerHTML = count > 1 ? `<i class="dot"></i> Demo mixed health` : `<i class="dot"></i> Demo healthy`;
+      healthPill.className = `status-pill ${count > 1 ? "stale" : "online"}`;
+      const metrics = document.querySelectorAll(".service-card .metric");
+      metrics[0].textContent = String(count);
+      metrics[1].textContent = String(countZones);
+    }
+    countSelect.addEventListener("change", () => { filterSelect.value = "all"; draw(); });
+    filterSelect.addEventListener("change", draw);
+    draw();
+    document.getElementById("record-toggle").addEventListener("click", event => {
+      recording = !recording;
+      document.getElementById("record-state").textContent = recording ? "Recording (demo)" : "Not recording";
+      document.getElementById("logs-record-state").textContent = recording ? "Recording (demo)" : "Not recording";
+      document.getElementById("record-state").classList.toggle("active", recording);
+      document.getElementById("logs-record-state").classList.toggle("active", recording);
+      event.currentTarget.textContent = recording ? "Stop recording (demo)" : "Start recording (demo)";
+    });
+    document.getElementById("autotune-button").addEventListener("click", () => alert("Simulation only. No command was sent. Real autotune uses relay feedback and needs a safety review."));
+    document.getElementById("detach-chart").addEventListener("click", () => document.getElementById("chart-dialog").classList.add("open"));
+    document.getElementById("close-chart").addEventListener("click", () => document.getElementById("chart-dialog").classList.remove("open"));
+    const preview = new URLSearchParams(location.search);
+    if (["1", "2", "3"].includes(preview.get("units"))) {
+      countSelect.value = preview.get("units");
+      draw();
+    }
+    const initialTab = tabs.find(tab => tab.dataset.tab === preview.get("tab"));
+    if (initialTab) initialTab.click();
+    if (preview.get("floating") === "true") {
+      document.getElementById("chart-dialog").classList.add("open");
+    }
+  </script>
+</body>
+</html>
